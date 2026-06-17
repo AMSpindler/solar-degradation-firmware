@@ -1,0 +1,25 @@
+# Checked-in board/console/PSRAM/timing config. PlatformIO regenerates the
+# active sdkconfig from this file on build; commit THIS file, not sdkconfig.*.
+
+# --- Console over the native USB-C port (USB-Serial-JTAG) ---
+# Routes esp_console / printf to the built-in USB-Serial-JTAG controller, so the
+# IDE serial monitor + plotter work over the single USB-C cable.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- PSRAM (N8R2 = 2 MB quad) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# --- 8 MB flash ---
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# --- Timing ---
+# 1 kHz tick gives 1 ms vTaskDelay granularity and tighter margins around the
+# 200 Hz sampling timer.
+CONFIG_FREERTOS_HZ=1000
+# Pin the esp_timer service task to CPU0, the sampling core.
+CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
+
+# --- FATFS long filenames for samples_YYYYMMDD_HH.* (Phase B) ---
+CONFIG_FATFS_LFN_HEAP=y
