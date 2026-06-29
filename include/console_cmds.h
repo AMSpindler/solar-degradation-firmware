@@ -1,15 +1,19 @@
 /*
- * console_cmds.h — USB-Serial-JTAG debug console for the HV bench test.
+ * console_cmds.h — the "menu" for the USB debug console.
  *
- * Commands (esp_console REPL):
- *   plot [on|off]        toggle continuous "V_calc,I_calc" CSV stream (serial plotter)
- *   sample once          read one packet, print raw + mV + calibrated values
- *   cal ...              two-point calibration capture (see `cal` help)
- *   reset cal            restore identity calibration (slope=1, offset=0)
- *   settime Y M D h m s  set DS3231 + system clock (UTC)
- *   status               sample rate, queue depth, RTC time, heap, cal coeffs
+ * There is just one public function: console_start(). It sets up the `clouds>`
+ * prompt over the USB cable and registers all the commands. The actual command
+ * code lives in console_cmds.c.
+ *
+ * Commands you can type at the prompt:
+ *   plot [on|off]        stream "V_calc,I_calc" CSV for a live serial plotter
+ *   sample once          read one packet (raw + millivolts + calibrated)
+ *   cal ...              two-point calibration (type `help` / `cal` for usage)
+ *   reset cal            forget calibration (back to value == raw)
+ *   settime Y M D h m s  set the DS3231 + system clock (UTC)
+ *   status               sampler/queue/RTC/heap/calibration summary
  */
 #pragma once
 
-/* Register all commands, then create and start the REPL over USB-Serial-JTAG. */
+/* Register all commands, then start the prompt over USB-Serial-JTAG. */
 void console_start(void);

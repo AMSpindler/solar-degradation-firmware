@@ -6,6 +6,11 @@
  * on the bench are marked "CONFIRM".
  *
  * Board: ESP32-S3-DevKitC-N8R2 (8 MB flash, 2 MB quad PSRAM), ESP-IDF.
+ *
+ * Everything below is a `#define`: a named constant. Before the code compiles,
+ * the compiler literally replaces each name with its value everywhere it's used.
+ * So changing a pin here changes it across the whole project. Names marked
+ * "CONFIRM" are best guesses to verify against your actual wiring.
  */
 #pragma once
 
