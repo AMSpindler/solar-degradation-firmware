@@ -14,5 +14,14 @@ idf_component_register(SRCS ${app_sources}
                                 console
                                 vfs
                                 esp_event
-                       # Phase B: esp_wifi esp_netif mqtt fatfs sdmmc esp_driver_spi
+                                # Phase B: Wi-Fi transport + SD logging
+                                esp_wifi
+                                esp_netif
+                                lwip
+                                esp_driver_spi
+                                esp_driver_sdspi
+                                sdmmc
+                                fatfs
+                                # MQTT — esp-mqtt vendored in components/mqtt
+                                mqtt
                        )

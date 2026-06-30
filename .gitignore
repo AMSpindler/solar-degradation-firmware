@@ -7,3 +7,10 @@
 # Auto-generated per-environment sdkconfig; keep sdkconfig.defaults tracked.
 sdkconfig.*
 !sdkconfig.defaults
+
+# Captured measurement data (CSV logs written by tools/capture_csv.py).
+/data/
+
+# Build-generated component manager lock file + editor workspace.
+dependencies.lock
+*.code-workspace

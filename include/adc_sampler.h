@@ -35,6 +35,12 @@ esp_err_t adc_sampler_stop(void);                     /* pause sampling        *
 bool      adc_sampler_is_running(void);
 uint16_t  adc_sampler_get_rate_hz(void);
 
+/* Subscribe a queue to the sample stream. Every reading is copied (non-blocking)
+ * to each subscribed queue, so consumers (plot, Wi-Fi, SD) never steal data from
+ * one another. Call this before adc_sampler_start(). The caller creates and owns
+ * the queue (element size must be sizeof(SamplePacket)). */
+esp_err_t adc_sampler_subscribe(QueueHandle_t q);
+
 /* Read one packet right now (used by the `sample once` command). */
 esp_err_t adc_sampler_read_once(SamplePacket *out);
 

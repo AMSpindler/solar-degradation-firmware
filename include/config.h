@@ -28,8 +28,14 @@
 #define SAMPLE_RATE_HZ_DEFAULT   200           /* valid range 100..500 Hz      */
 #define SAMPLE_RATE_HZ_MIN       100
 #define SAMPLE_RATE_HZ_MAX       500
-#define SAMPLE_QUEUE_LEN         1024          /* ~5 s buffer @200 Hz          */
-#define BATCH_SAMPLES            100           /* samples per MQTT/SD batch (Phase B) */
+#define SAMPLE_QUEUE_LEN         1024          /* console plot queue (~5 s)    */
+#define BATCH_SAMPLES            100           /* samples per UDP/MQTT/SD batch */
+
+/* Fan-out: the sampler copies each reading into several independent "consumer"
+ * queues (console plot, Wi-Fi sender, SD logger) so they never steal data from
+ * each other. Each consumer gets its own queue of CONSUMER_QUEUE_LEN packets. */
+#define MAX_SAMPLE_SUBSCRIBERS   4
+#define CONSUMER_QUEUE_LEN       512           /* ~2.5 s buffer @200 Hz        */
 
 /* ----------------------------------------------------------------------------
  * ADC  — ADC1 ONLY. ADC2 shares hardware with WiFi on the ESP32-S3 and its
@@ -61,7 +67,7 @@
 #define AT24C32_ADDR             0x57
 
 /* ----------------------------------------------------------------------------
- * SD card over SPI  (Phase B — not used by the lab-critical path).
+ * SD card over SPI  (Phase B backup logging).
  * SD pins MUST NOT collide with the ADC1 channels above (GPIO1..GPIO4).
  * ------------------------------------------------------------------------- */
 #define SD_SPI_HOST              SPI2_HOST
@@ -70,17 +76,35 @@
 #define SD_PIN_SCLK              12            /* CONFIRM                       */
 #define SD_PIN_CS                10            /* CONFIRM                       */
 #define SD_MOUNT_POINT           "/sdcard"
+#define SD_FILE_PREFIX           "samples"     /* -> samples_YYYYMMDD_HH.csv    */
+#define SD_WRITE_BUF_BYTES       4096          /* buffered writes (setvbuf)     */
+#define SD_FLUSH_INTERVAL_MS     10000         /* flush to card every 10 s      */
 
 /* ----------------------------------------------------------------------------
- * WiFi / MQTT  (Phase B).
+ * WiFi  (Phase B). Fill in your lab network credentials.
  * ------------------------------------------------------------------------- */
 #define WIFI_SSID                "your-ssid"               /* FILL             */
 #define WIFI_PASS                "your-pass"               /* FILL             */
+/* Reconnect backoff: wait grows 1s -> 2s -> ... capped at 30s between tries.  */
+#define WIFI_RECONNECT_MIN_MS    1000
+#define WIFI_RECONNECT_MAX_MS    30000
+
+/* ----------------------------------------------------------------------------
+ * Transport selection (Phase B). Turn each on (1) or off (0). You can run both;
+ * UDP works with no broker, MQTT needs Mosquitto running on the lab PC AND the
+ * esp-mqtt library vendored into components/ (see README).
+ * ------------------------------------------------------------------------- */
+#define TRANSPORT_USE_UDP        1
+#define TRANSPORT_USE_MQTT       1             /* esp-mqtt vendored in components/mqtt */
+
+/* --- UDP: the ESP32 sends sample batches straight to this PC + port. --- */
+#define UDP_DEST_IP              "192.168.1.10"  /* FILL: your lab PC's IP      */
+#define UDP_DEST_PORT            9000
+
+/* --- MQTT: publish to a Mosquitto broker. Topic includes the device id. --- */
 #define MQTT_BROKER_URI          "mqtt://192.168.1.10:1883" /* FILL            */
-#define MQTT_TOPIC_FMT           "clouds/%08lX/samples"    /* device_id        */
+#define MQTT_TOPIC_FMT           "clouds/%08lX/samples"     /* device_id        */
 #define MQTT_QOS                 1
-#define MQTT_RECONNECT_MIN_MS    1000
-#define MQTT_RECONNECT_MAX_MS    30000
 
 /* ----------------------------------------------------------------------------
  * Task placement (FreeRTOS).  Core 0 = real-time sampling, Core 1 = I/O.

@@ -4,10 +4,10 @@ Firmware for the Lenert Lab **CLOUDS** team (Cloud-driven Learning Of
 Underperformance in Devices and Systems).
 
 This is the **ESP32-S3 firmware** that samples an isolated voltage signal and a
-current signal, timestamps each reading, and (eventually) streams the data to a
-lab PC with an SD-card backup. Its first job is to support the **HV Isolated
-Sensing bench test** (a 12 V → 500 V staircase), so the current focus is clean
-ADC sampling, calibration, and a live serial-plotter view.
+current signal, timestamps each reading, streams the data to a lab PC over
+Wi-Fi, and keeps an SD-card backup. Its first job is to support the **HV Isolated
+Sensing bench test** (a 12 V → 500 V staircase): clean ADC sampling, calibration,
+and a live serial-plotter view, with Wi-Fi + SD validated during the 500 V soak.
 
 > **Framework:** ESP-IDF (not Arduino), built with PlatformIO. Language: C.
 
@@ -110,23 +110,80 @@ cal i solve         # save current calibration
 
 Calibration is stored in NVS, so it survives power-off.
 
+### Saving data to a CSV file
+
+Right now data travels **only over the USB cable** — the board prints it; it is
+not yet sent over Wi-Fi or written to an SD card (those are Phase B). To keep a
+record on your laptop, use the capture script in [`tools/`](tools/), which reads
+the `plot` stream and writes a clean CSV:
+
+```bash
+# Close `pio monitor` first — only one program can use the port at a time.
+~/.platformio/penv/bin/python tools/capture_csv.py --out data/tier_500V.csv
+# ...records V_calc,I_calc until you press Ctrl+C.
+```
+
+It auto-detects the board, starts `plot`, saves each reading with a PC
+timestamp, and stops the stream on Ctrl+C. Files default to `data/` (which is
+git-ignored). Run it once per voltage tier with a descriptive `--out` name.
+
+A typical bench session: flash → `pio monitor` to calibrate with `cal` → exit
+the monitor → run the capture script for each staircase step.
+
+### Streaming over Wi-Fi (and SD backup)
+
+The firmware also sends each batch of readings over Wi-Fi and, independently,
+saves everything to the SD card. The sampler "fans out" a copy of every reading
+to the console, the Wi-Fi sender, and the SD logger, so they never interfere.
+
+**First, set your network details in [`include/config.h`](include/config.h):**
+`WIFI_SSID`, `WIFI_PASS`, and `UDP_DEST_IP` (your lab PC's IP address).
+
+**Wi-Fi via UDP (works immediately, no broker needed).** On the lab PC:
+
+```bash
+python3 tools/udp_receiver.py --csv wifi.csv   # prints each batch as it arrives
+```
+
+Power the board; you should see batches printed with sample counts and sequence
+numbers (gaps flag dropped packets). UDP is "fire and forget" — a few packets may
+drop, which is fine because the SD card holds the complete record.
+
+**Wi-Fi via MQTT (reliable, needs a broker).** The esp-mqtt library is already
+vendored in [`components/mqtt/`](components/mqtt/) and enabled
+(`TRANSPORT_USE_MQTT` in config.h). To use it, install + run a broker on the PC
+and set `MQTT_BROKER_URI`:
+
+```bash
+brew install mosquitto && mosquitto -v          # run the broker
+mosquitto_sub -t 'clouds/#' -v                  # watch incoming messages
+```
+
+**SD backup.** With a card wired (SPI pins in config.h), the firmware writes
+`samples_YYYYMMDD_HH.csv` to the card — one file per hour, columns
+`timestamp_us,voutp_raw,voutn_raw,current_raw,v_calc,i_calc,spare`. If no card is
+present the firmware just logs a warning and keeps running. To verify the backup
+matches the network log, compare the SD CSV against `wifi.csv` for the same time.
+
 ---
 
 ## Status
 
-### Implemented (Phase A — bench-test ready)
+### Implemented
 - ✅ ADC sampling of AMC1311 (differential) + ACS724 at 200 Hz via `esp_timer`
 - ✅ Factory (eFuse) ADC calibration for accurate raw → millivolts
 - ✅ Two-point user calibration with NVS persistence
 - ✅ DS3231 real-time clock: boot sync + 10-minute drift correction
 - ✅ USB serial console with live plotting and diagnostics
+- ✅ Sampler fan-out so console / Wi-Fi / SD each get every reading
+- ✅ **`wifi_transport`** — Wi-Fi (STA) with UDP **and** MQTT senders, batched, with exponential-backoff reconnect
+- ✅ **`sd_logger`** — SD-over-SPI backup logging (CSV, hourly rotation, buffered 10 s flush)
 
-### Not yet implemented (Phase B — validated during the 500 V soak)
-- ⬜ **`wifi_transport`** — Wi-Fi + MQTT streaming to the lab PC (QoS 1, reconnect with backoff)
-- ⬜ **`sd_logger`** — SD-card backup logging (binary + CSV, hourly file rotation)
+### Not yet implemented
 - ⬜ DMA-based continuous ADC (`adc_continuous`) if 200 Hz one-shot proves jittery
-- ⬜ Batch fan-out so Wi-Fi and SD log the exact same data
+- ⬜ Binary (not just CSV) SD format byte-identical to the wire batches
 
-The Phase-B component dependencies are already noted (commented out) in
-[`src/CMakeLists.txt`](src/CMakeLists.txt), and the place they get initialized is
-marked in [`src/main.c`](src/main.c).
+> **Note on the esp-mqtt library:** your ESP-IDF install shipped without the
+> esp-mqtt source, so it's vendored into [`components/mqtt/`](components/mqtt/)
+> (Apache-2.0). It's committed with the project so the firmware builds on a fresh
+> clone. Set `TRANSPORT_USE_MQTT 0` in config.h to build without it.

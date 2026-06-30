@@ -26,6 +26,8 @@
 #include "adc_sampler.h"     /* reads the voltage/current sensors           */
 #include "rtc_clock.h"       /* the DS3231 real-time clock chip             */
 #include "console_cmds.h"    /* the text commands you type over USB         */
+#include "wifi_transport.h"  /* Phase B: send sample batches over Wi-Fi      */
+#include "sd_logger.h"       /* Phase B: backup logging to the SD card       */
 
 #include "esp_log.h"         /* ESP_LOGI(...) prints labeled debug messages  */
 #include "esp_event.h"       /* "event loop" plumbing (needed by Wi-Fi later)*/
@@ -106,8 +108,18 @@ void app_main(void)
     /* 5. Start the console: the `clouds>` prompt you type into over USB. */
     console_start();
 
-    /* 6. Now actually start sampling. From here a timer fires 200x/second on
-     *    CPU core 0 and pushes readings onto the queue. */
+    /* 6. Phase B — Wi-Fi sender and SD backup logger. Each subscribes to the
+     *    sample stream so they get their own copy of every reading. Both are
+     *    best-effort: if Wi-Fi can't connect or no SD card is present, the rest
+     *    of the firmware keeps running. */
+    wifi_transport_init();
+    wifi_transport_start();
+    if (sd_logger_init() == ESP_OK) {
+        sd_logger_start();
+    }
+
+    /* 7. Now actually start sampling. From here a timer fires 200x/second on
+     *    CPU core 0 and fans readings out to all subscribers. */
     ESP_ERROR_CHECK(adc_sampler_start());
 
     /* app_main() returns here, but the timer + console tasks keep running. */

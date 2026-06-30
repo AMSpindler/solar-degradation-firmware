@@ -51,6 +51,11 @@ static volatile bool             s_running = false;  /* is the timer going?     
 /* The calibration numbers, one set per channel (voltage and current).             */
 static cal_coeff_t               s_cal[CAL_CH_COUNT];
 
+/* Fan-out: every reading is copied to each of these subscriber queues. The
+ * console plot, the Wi-Fi sender, and the SD logger each register one. */
+static QueueHandle_t             s_subs[MAX_SAMPLE_SUBSCRIBERS];
+static int                       s_nsubs = 0;
+
 /* ------------------------------------------------------------------------- */
 /* Low-level reads                                                           */
 /* ------------------------------------------------------------------------- */
@@ -92,10 +97,13 @@ static void sample_timer_cb(void *arg)
     SamplePacket pkt;
     build_packet(&pkt);
 
-    /* The last argument "0" means "don't wait": if the queue is full (nobody is
-     * emptying it), throw this sample away rather than stall. The `(void)`
-     * means we intentionally ignore the success/fail result. */
-    (void)xQueueSend(g_sample_queue, &pkt, 0);
+    /* Copy the reading to every subscriber's queue. The last argument "0" means
+     * "don't wait": if a queue is full (that consumer fell behind), drop the
+     * sample for that one consumer rather than stall the whole sampler. Each
+     * consumer's queue is independent, so a slow SD card can't starve Wi-Fi. */
+    for (int i = 0; i < s_nsubs; i++) {
+        (void)xQueueSend(s_subs[i], &pkt, 0);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -162,6 +170,20 @@ static esp_err_t cal_save_to_nvs(int ch)
 /* Public API (the functions other files are allowed to call)                */
 /* ------------------------------------------------------------------------- */
 
+/* Register a queue to receive a copy of every reading. */
+esp_err_t adc_sampler_subscribe(QueueHandle_t q)
+{
+    if (q == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_nsubs >= MAX_SAMPLE_SUBSCRIBERS) {
+        ESP_LOGE(TAG, "too many subscribers (max %d)", MAX_SAMPLE_SUBSCRIBERS);
+        return ESP_ERR_NO_MEM;
+    }
+    s_subs[s_nsubs++] = q;
+    return ESP_OK;
+}
+
 /* One-time setup. Called once from app_main() before sampling starts. */
 esp_err_t adc_sampler_init(uint16_t sample_rate_hz)
 {
@@ -173,12 +195,14 @@ esp_err_t adc_sampler_init(uint16_t sample_rate_hz)
     }
     s_rate_hz = sample_rate_hz;
 
-    /* Create the conveyor belt: room for SAMPLE_QUEUE_LEN packets. */
+    /* Create the console-plot conveyor belt and register it as subscriber #0,
+     * so the `plot` command works exactly as before. Wi-Fi/SD add their own. */
     g_sample_queue = xQueueCreate(SAMPLE_QUEUE_LEN, sizeof(SamplePacket));
     if (g_sample_queue == NULL) {
         ESP_LOGE(TAG, "queue alloc failed");
         return ESP_ERR_NO_MEM;  /* "out of memory" */
     }
+    adc_sampler_subscribe(g_sample_queue);
 
     /* Turn on ADC1. */
     adc_oneshot_unit_init_cfg_t unit_cfg = { .unit_id = ADC_UNIT };

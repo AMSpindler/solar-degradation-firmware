@@ -1,0 +1,8 @@
+# Custom partition table for the 8 MB flash (DevKitC-N8R2).
+# The default table only gives ~1 MB to the app, which Wi-Fi + MQTT overflow.
+# This gives the app 4 MB (plenty of headroom) with no OTA partitions.
+#
+# Name,     Type, SubType,  Offset,    Size
+nvs,        data, nvs,      0x9000,    0x6000
+phy_init,   data, phy,      0xf000,    0x1000
+factory,    app,  factory,  0x10000,   0x400000
