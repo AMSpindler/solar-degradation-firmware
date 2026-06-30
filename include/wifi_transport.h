@@ -22,3 +22,7 @@ void wifi_transport_start(void);
 
 /* True once Wi-Fi is associated and has an IP address. */
 bool wifi_transport_is_connected(void);
+
+/* True once the MQTT client is connected to the broker. Always false when MQTT
+ * is disabled (TRANSPORT_USE_MQTT 0). */
+bool wifi_transport_mqtt_is_connected(void);

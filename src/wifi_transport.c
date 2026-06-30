@@ -182,6 +182,15 @@ esp_err_t wifi_transport_init(void)
 
 bool wifi_transport_is_connected(void) { return s_wifi_connected; }
 
+bool wifi_transport_mqtt_is_connected(void)
+{
+#if TRANSPORT_USE_MQTT
+    return s_mqtt_connected;
+#else
+    return false;
+#endif
+}
+
 /* ------------------------------------------------------------------------- */
 /* Sender task: batch readings and ship them                                 */
 /* ------------------------------------------------------------------------- */

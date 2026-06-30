@@ -25,6 +25,8 @@
 #include "config.h"
 #include "adc_sampler.h"
 #include "rtc_clock.h"
+#include "wifi_transport.h"   /* Wi-Fi / MQTT connection state for `status` */
+#include "sd_logger.h"        /* SD mount state for `status`               */
 
 #include <stdio.h>                   /* printf                                 */
 #include <string.h>                 /* strcmp (compare text)                  */
@@ -348,6 +350,15 @@ static int cmd_status(int argc, char **argv)
     } else {
         printf("RTC       : read failed\n");
     }
+
+    /* Live I/O state — handy for spotting "why isn't data arriving?". */
+    printf("wifi      : %s\n", wifi_transport_is_connected() ? "connected" : "down");
+#if TRANSPORT_USE_MQTT
+    printf("mqtt      : %s\n", wifi_transport_mqtt_is_connected() ? "connected (broker)" : "down");
+#else
+    printf("mqtt      : disabled\n");
+#endif
+    printf("SD card   : %s\n", sd_logger_is_mounted() ? "mounted" : "not mounted");
 
     for (int ch = 0; ch < CAL_CH_COUNT; ch++) {
         cal_coeff_t c;
