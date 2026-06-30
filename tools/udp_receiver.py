@@ -16,8 +16,10 @@ for PlatformIO's Python here).
 Packet layout (must match include/sample_packet.h, little-endian):
   SampleBatchHeader: uint32 device_id, uint32 sequence_num,
                      uint16 sample_count, uint16 sample_rate_hz   (12 bytes)
-  SamplePacket  x N: uint64 timestamp_us, uint16 voltage_raw,
-                     uint16 current_raw, uint16 aux0, uint16 aux1 (16 bytes each)
+  SamplePacket  x N: uint64 timestamp_us, uint16 voltage_raw (=VOUTP),
+                     uint16 current_raw (=Vout), uint16 aux0 (=VOUTN),
+                     uint16 aux1 (=Vref)                       (16 bytes each)
+  Both sensors are differential: voltage = VOUTP - VOUTN, current = Vout - Vref.
 """
 import argparse
 import socket
@@ -26,7 +28,7 @@ import sys
 
 HEADER_FMT = "<IIHH"          # device_id, seq, count, rate
 HEADER_SIZE = struct.calcsize(HEADER_FMT)   # 12
-SAMPLE_FMT = "<QHHHH"         # timestamp_us, voutp, current, aux0(=voutn), aux1
+SAMPLE_FMT = "<QHHHH"         # timestamp_us, voutp, iout, voutn, iref
 SAMPLE_SIZE = struct.calcsize(SAMPLE_FMT)   # 16
 
 
@@ -43,7 +45,7 @@ def main():
     csv = None
     if args.csv:
         csv = open(args.csv, "w")
-        csv.write("device_id,seq,timestamp_us,voutp_raw,voutn_raw,current_raw,aux1\n")
+        csv.write("device_id,seq,timestamp_us,voutp_raw,voutn_raw,iout_raw,iref_raw\n")
 
     last_seq = None
     total_samples = 0
@@ -66,16 +68,16 @@ def main():
                 off = HEADER_SIZE + i * SAMPLE_SIZE
                 if off + SAMPLE_SIZE > len(data):
                     break
-                ts, voutp, cur, voutn, aux1 = struct.unpack_from(SAMPLE_FMT, data, off)
+                ts, voutp, iout, voutn, iref = struct.unpack_from(SAMPLE_FMT, data, off)
                 if first is None:
-                    first = (ts, voutp - voutn, cur)
+                    first = (ts, voutp - voutn, iout - iref)
                 total_samples += 1
                 if csv:
-                    csv.write(f"{dev:08X},{seq},{ts},{voutp},{voutn},{cur},{aux1}\n")
+                    csv.write(f"{dev:08X},{seq},{ts},{voutp},{voutn},{iout},{iref}\n")
             if csv:
                 csv.flush()
 
-            fs = f" first(v_diff={first[1]}, i={first[2]})" if first else ""
+            fs = f" first(v_diff={first[1]}, i_diff={first[2]})" if first else ""
             print(f"dev {dev:08X}  seq {seq}  {count} samples @ {rate}Hz  "
                   f"total {total_samples}{fs}{gap}")
     except KeyboardInterrupt:

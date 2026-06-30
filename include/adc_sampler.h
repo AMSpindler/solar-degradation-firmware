@@ -2,9 +2,9 @@
  * adc_sampler.h — the "menu" of functions the ADC sampler offers.
  *
  * Other files #include this to learn what adc_sampler.c can do. The actual code
- * is in adc_sampler.c. In short: it reads the AMC1311 (voltage, differential)
- * and ACS724 (current) sensors on a timer, drops readings on g_sample_queue,
- * and converts raw numbers to real units using saved calibration.
+ * is in adc_sampler.c. In short: it reads the AMC1311 (voltage) and HSTS016L
+ * (current) sensors on a timer — both differential — drops readings on
+ * g_sample_queue, and converts raw numbers to real units using saved calibration.
  */
 #pragma once
 
@@ -45,9 +45,10 @@ esp_err_t adc_sampler_subscribe(QueueHandle_t q);
 esp_err_t adc_sampler_read_once(SamplePacket *out);
 
 /* Average many readings — steadier numbers for calibration (`cal` command).
- * Voltage version returns the averaged (VOUTP - VOUTN) difference. */
+ * Both return the averaged differential: voltage (VOUTP - VOUTN), current
+ * (Vout - Vref). */
 esp_err_t adc_sampler_average_voltage_raw(int n, float *out_diff);
-esp_err_t adc_sampler_average_current_raw(int n, float *out_raw);
+esp_err_t adc_sampler_average_current_raw(int n, float *out_diff);
 
 /* ---- Calibration: read, set (saves to NVS), or reset to defaults ---- */
 esp_err_t adc_sampler_get_cal(int ch, cal_coeff_t *out);

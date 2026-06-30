@@ -132,7 +132,7 @@ static FILE *ensure_file_open(void)
     /* Use our own big buffer so the card is written in ~4 KB chunks. */
     setvbuf(s_file, s_iobuf, _IOFBF, sizeof(s_iobuf));
     if (is_new) {
-        fprintf(s_file, "timestamp_us,voutp_raw,voutn_raw,current_raw,v_calc,i_calc,spare\n");
+        fprintf(s_file, "timestamp_us,voutp_raw,voutn_raw,iout_raw,v_calc,i_calc,iref_raw\n");
     }
     s_cur_hour = t.tm_hour;
     ESP_LOGI(TAG, "logging to %s", path);

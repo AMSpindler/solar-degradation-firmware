@@ -113,19 +113,24 @@ static int cmd_sample(int argc, char **argv)
         return 1;
     }
     int v_diff = (int)p.voltage_raw - (int)p.aux_channels[0];
+    int i_diff = (int)p.current_raw - (int)p.aux_channels[1];
     float v, i;
     adc_sampler_apply_cal(&p, &v, &i);
 
-    /* Raw ADC counts (0..4095) — good for spotting wiring problems. */
-    printf("raw : VOUTP=%u VOUTN=%u diff=%d  I=%u  aux1=%u\n",
-           p.voltage_raw, p.aux_channels[0], v_diff, p.current_raw, p.aux_channels[1]);
+    /* Raw ADC counts (0..4095) — good for spotting wiring problems.
+     * Each sensor shows its two legs and their difference. */
+    printf("Vraw: VOUTP=%u VOUTN=%u diff=%d\n",
+           p.voltage_raw, p.aux_channels[0], v_diff);
+    printf("Iraw: IOUT=%u IREF=%u diff=%d\n",
+           p.current_raw, p.aux_channels[1], i_diff);
 
     /* If factory calibration is available, also show millivolts. */
-    int mvp, mvn, mvi;
-    if (adc_sampler_raw_to_mv(p.voltage_raw, &mvp) &&
-        adc_sampler_raw_to_mv(p.aux_channels[0], &mvn) &&
-        adc_sampler_raw_to_mv(p.current_raw, &mvi)) {
-        printf("mV  : VOUTP=%d VOUTN=%d diff=%d  I=%d\n", mvp, mvn, mvp - mvn, mvi);
+    int mvvp, mvvn, mvip, mvir;
+    if (adc_sampler_raw_to_mv(p.voltage_raw, &mvvp) &&
+        adc_sampler_raw_to_mv(p.aux_channels[0], &mvvn) &&
+        adc_sampler_raw_to_mv(p.current_raw, &mvip) &&
+        adc_sampler_raw_to_mv(p.aux_channels[1], &mvir)) {
+        printf("mV  : V diff=%d   I diff=%d\n", mvvp - mvvn, mvip - mvir);
     }
     /* The final calibrated values in real units. */
     printf("calc: V=%.5f  I=%.5f\n", v, i);
@@ -174,7 +179,7 @@ static void cal_show(void)
 static int cal_capture_point(int ch, float known)
 {
     float raw;
-    /* Voltage uses the VOUTP-VOUTN difference; current uses its single channel. */
+    /* Both are differential: voltage uses VOUTP-VOUTN, current uses Vout-Vref. */
     esp_err_t err = (ch == CAL_CH_VOLTAGE)
         ? adc_sampler_average_voltage_raw(ADC_READ_ONCE_AVG_N, &raw)
         : adc_sampler_average_current_raw(ADC_READ_ONCE_AVG_N, &raw);

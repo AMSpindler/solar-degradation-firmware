@@ -19,9 +19,9 @@ and a live serial-plotter view, with Wi-Fi + SD validated during the 500 V soak.
 |-----------|------|-----------------|
 | **ESP32-S3-DevKitC-N8R2** | The microcontroller running this firmware (8 MB flash, 2 MB PSRAM, dual-core) | USB-C to the laptop |
 | **AMC1311** isolation amplifier | Measures the high-voltage side safely and outputs a small **differential** voltage (VOUTP, VOUTN) | Two ADC1 pins |
-| **ACS724** current sensor (30 A, 66 mV/A) | Measures current, single-ended analog output | One ADC1 pin |
+| **HSTS016L** Hall current sensor (20 A, 2.5 V±0.625 V ≈ 31.25 mV/A) | Measures current; **differential** output Vout (yellow) vs Vref (white). Powered at **5 V** (red V+, black 0 V) | Two ADC1 pins |
 | **DS3231 + AT24C32** RTC module | Battery-backed real-time clock so timestamps are correct across reboots | I2C (2 wires) |
-| **micro-SD module (SPI)** | Backup logging *(Phase B — not wired in code yet)* | SPI |
+| **micro-SD module (SPI)** | Backup logging | SPI |
 
 ### Pin map (defined in [`include/config.h`](include/config.h))
 
@@ -31,13 +31,15 @@ All sampling is on **ADC1** only — ADC2 stops working once Wi-Fi is on.
 |--------|------|-------|
 | AMC1311 **VOUTP** (+) | GPIO1 | ADC1 channel 0 |
 | AMC1311 **VOUTN** (−) | GPIO2 | ADC1 channel 1 |
-| ACS724 output | GPIO3 | ADC1 channel 2 |
-| spare aux | GPIO4 | ADC1 channel 3 |
+| HSTS016L **Vout** (yellow) | GPIO3 | ADC1 channel 2 |
+| HSTS016L **Vref** (white) | GPIO4 | ADC1 channel 3 |
 | I2C **SDA** | GPIO8 | DS3231 *(confirm against your wiring)* |
 | I2C **SCL** | GPIO9 | DS3231 *(confirm against your wiring)* |
-| SD card (SPI) | 10–13 | Phase B *(confirm before use)* |
+| SD card (SPI) | 10–13 | *(confirm before use)* |
 
-The real voltage signal is the **difference** VOUTP − VOUTN.
+Both sensors are differential: the real signals are **VOUTP − VOUTN** (volts) and
+**Vout − Vref** (amps). The HSTS016L needs **5 V** power, but its 2.5 V-centered
+outputs stay under 3.3 V, so they connect straight to the ADC pins.
 
 ---
 
@@ -47,7 +49,7 @@ At boot, [`src/main.c`](src/main.c) sets everything up in order, then hands off
 to two background "tasks": the sampling timer and the console.
 
 ```
-   [AMC1311 + ACS724] --analog--> ADC1
+   [AMC1311 + HSTS016L] --analog--> ADC1
                                    |
                                    v
         esp_timer fires 200x/sec -> adc_sampler reads + timestamps
@@ -64,7 +66,7 @@ to two background "tasks": the sampling timer and the console.
 | File | What it does |
 |------|--------------|
 | [`src/main.c`](src/main.c) | Entry point. Initializes NVS, I2C, the RTC, and the ADC sampler, starts the console, then starts sampling. |
-| [`src/adc_sampler.c`](src/adc_sampler.c) | Reads the AMC1311/ACS724 on a 200 Hz timer, pushes readings to the queue, and handles calibration (raw → volts/amps). |
+| [`src/adc_sampler.c`](src/adc_sampler.c) | Reads the AMC1311/HSTS016L on a 200 Hz timer, pushes readings to the queue, and handles calibration (raw → volts/amps). |
 | [`src/rtc_clock.c`](src/rtc_clock.c) | Talks to the DS3231 over I2C. Sets the system clock at boot and re-syncs every 10 minutes. |
 | [`src/console_cmds.c`](src/console_cmds.c) | The `clouds>` USB prompt and all its commands (plot, sample, cal, status, …). |
 | [`include/config.h`](include/config.h) | **All** pin numbers and settings in one place — start here to change hardware wiring. |
@@ -108,7 +110,9 @@ cal i point 10      # known 10 A, capture point 2
 cal i solve         # save current calibration
 ```
 
-Calibration is stored in NVS, so it survives power-off.
+Calibration is stored in NVS, so it survives power-off. With the HSTS016L the
+zero-current point reads Vout ≈ Vref (difference ≈ 0), and the signal moves
+~31.25 mV/A (≈ 38 ADC counts per amp) from there.
 
 ### Saving data to a CSV file
 
@@ -170,7 +174,7 @@ matches the network log, compare the SD CSV against `wifi.csv` for the same time
 ## Status
 
 ### Implemented
-- ✅ ADC sampling of AMC1311 (differential) + ACS724 at 200 Hz via `esp_timer`
+- ✅ ADC sampling of AMC1311 + HSTS016L (both differential) at 200 Hz via `esp_timer`
 - ✅ Factory (eFuse) ADC calibration for accurate raw → millivolts
 - ✅ Two-point user calibration with NVS persistence
 - ✅ DS3231 real-time clock: boot sync + 10-minute drift correction

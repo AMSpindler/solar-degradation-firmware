@@ -42,15 +42,17 @@
  *        reads fail while WiFi is active, so all sampling stays on ADC1.
  *        ESP32-S3 ADC1 = GPIO1..GPIO10 (ADC1_CH0..CH9).
  *
- * AMC1311 voltage output is DIFFERENTIAL: VOUTP and VOUTN are read on two
- * channels and the firmware computes (VOUTP - VOUTN). ACS724 current output is
- * single-ended.
+ * Both sensors are DIFFERENTIAL. The AMC1311 voltage output is VOUTP/VOUTN; the
+ * HSTS016L current output is Vout/Vref (its white reference lead). The firmware
+ * reads each pair on two channels and uses the difference: (VOUTP - VOUTN) and
+ * (Vout - Vref). The HSTS016L runs on 5 V; its 2.5 V±0.625 V output (≈31.25 mV/A
+ * on the 20 A model) sits within the 3.3 V ADC range, so it wires in directly.
  * ------------------------------------------------------------------------- */
 #define ADC_UNIT                 ADC_UNIT_1
-#define ADC_VOLTAGE_P_CHANNEL    ADC_CHANNEL_0 /* GPIO1 — AMC1311 VOUTP (+)     */
-#define ADC_VOLTAGE_N_CHANNEL    ADC_CHANNEL_1 /* GPIO2 — AMC1311 VOUTN (-)     */
-#define ADC_CURRENT_CHANNEL      ADC_CHANNEL_2 /* GPIO3 — ACS724 Vout           */
-#define ADC_AUX_CHANNEL          ADC_CHANNEL_3 /* GPIO4 — spare (CONFIRM)       */
+#define ADC_VOLTAGE_P_CHANNEL    ADC_CHANNEL_0 /* GPIO1 — AMC1311 VOUTP (+)      */
+#define ADC_VOLTAGE_N_CHANNEL    ADC_CHANNEL_1 /* GPIO2 — AMC1311 VOUTN (-)      */
+#define ADC_CURRENT_CHANNEL      ADC_CHANNEL_2 /* GPIO3 — HSTS016L Vout (yellow) */
+#define ADC_CURRENT_REF_CHANNEL  ADC_CHANNEL_3 /* GPIO4 — HSTS016L Vref (white)  */
 #define ADC_ATTEN                ADC_ATTEN_DB_12 /* full-scale ~0..3.1 V        */
 #define ADC_BITWIDTH             ADC_BITWIDTH_12 /* 0..4095                     */
 

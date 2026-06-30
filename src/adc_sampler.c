@@ -7,10 +7,11 @@
  * chip's ADC gives a number from 0 to 4095 (that's "12-bit"), where 0 means
  * ~0 V and 4095 means the top of the range (~3.1 V here).
  *
- * We read three things every sample:
- *   - AMC1311 VOUTP and VOUTN  (the voltage sensor is "differential": the real
- *     signal is the DIFFERENCE between these two pins, VOUTP - VOUTN)
- *   - ACS724 output            (the current sensor, a single pin)
+ * We read two differential sensors every sample (four ADC channels):
+ *   - AMC1311 VOUTP and VOUTN  (voltage; the signal is the difference VOUTP - VOUTN)
+ *   - HSTS016L Vout and Vref   (current; the signal is the difference Vout - Vref)
+ *   "Differential" means the real reading is the gap between the two pins, which
+ *   cancels offset/supply drift shared by both.
  *
  * A hardware timer fires 200 times per second. Each time, our callback reads
  * the ADC, packs the numbers into a SamplePacket, and drops it on a "queue"
@@ -82,8 +83,8 @@ static void build_packet(SamplePacket *p)
     p->timestamp_us    = (uint64_t)esp_timer_get_time();
     p->voltage_raw     = read_raw(ADC_VOLTAGE_P_CHANNEL);  /* AMC1311 VOUTP */
     p->aux_channels[0] = read_raw(ADC_VOLTAGE_N_CHANNEL);  /* AMC1311 VOUTN */
-    p->current_raw     = read_raw(ADC_CURRENT_CHANNEL);    /* ACS724        */
-    p->aux_channels[1] = read_raw(ADC_AUX_CHANNEL);        /* spare         */
+    p->current_raw     = read_raw(ADC_CURRENT_CHANNEL);     /* HSTS016L Vout */
+    p->aux_channels[1] = read_raw(ADC_CURRENT_REF_CHANNEL); /* HSTS016L Vref */
 }
 
 /*
@@ -213,7 +214,7 @@ esp_err_t adc_sampler_init(uint16_t sample_rate_hz)
     adc_oneshot_chan_cfg_t chan_cfg = { .atten = ADC_ATTEN, .bitwidth = ADC_BITWIDTH };
     const adc_channel_t channels[] = {
         ADC_VOLTAGE_P_CHANNEL, ADC_VOLTAGE_N_CHANNEL,
-        ADC_CURRENT_CHANNEL,   ADC_AUX_CHANNEL,
+        ADC_CURRENT_CHANNEL,   ADC_CURRENT_REF_CHANNEL,
     };
     /* Loop over the list and configure each one. sizeof(arr)/sizeof(arr[0])
      * is the classic C way to count items in an array. */
@@ -318,17 +319,20 @@ esp_err_t adc_sampler_average_voltage_raw(int n, float *out_diff)
     return ESP_OK;
 }
 
-/* Same idea for the current sensor (single channel, no difference). */
-esp_err_t adc_sampler_average_current_raw(int n, float *out_raw)
+/* Same idea for the current sensor. Returns the averaged DIFFERENCE
+ * (Vout - Vref), the HSTS016L's real current signal. */
+esp_err_t adc_sampler_average_current_raw(int n, float *out_diff)
 {
-    if (out_raw == NULL || n <= 0) {
+    if (out_diff == NULL || n <= 0) {
         return ESP_ERR_INVALID_ARG;
     }
     double acc = 0.0;
     for (int i = 0; i < n; i++) {
-        acc += (double)read_raw(ADC_CURRENT_CHANNEL);
+        int p = read_raw(ADC_CURRENT_CHANNEL);      /* HSTS016L Vout */
+        int q = read_raw(ADC_CURRENT_REF_CHANNEL);  /* HSTS016L Vref */
+        acc += (double)(p - q);
     }
-    *out_raw = (float)(acc / n);
+    *out_diff = (float)(acc / n);
     return ESP_OK;
 }
 
@@ -375,14 +379,16 @@ esp_err_t adc_sampler_reset_cal(void)
  */
 void adc_sampler_apply_cal(const SamplePacket *p, float *v_calc, float *i_calc)
 {
-    /* The voltage signal is the difference between the two AMC1311 pins. */
+    /* Both signals are a difference between a sensor's two output legs:
+     * voltage = VOUTP - VOUTN, current = Vout - Vref. */
     int v_diff = (int)p->voltage_raw - (int)p->aux_channels[0];
+    int i_diff = (int)p->current_raw - (int)p->aux_channels[1];
     if (v_calc) {
         *v_calc = s_cal[CAL_CH_VOLTAGE].slope * (float)v_diff
                   + s_cal[CAL_CH_VOLTAGE].offset;
     }
     if (i_calc) {
-        *i_calc = s_cal[CAL_CH_CURRENT].slope * (float)p->current_raw
+        *i_calc = s_cal[CAL_CH_CURRENT].slope * (float)i_diff
                   + s_cal[CAL_CH_CURRENT].offset;
     }
 }

@@ -17,7 +17,7 @@
  * Phase A (everything needed for the HV bench test):
  *   NVS -> event loop -> I2C bus -> DS3231 clock -> ADC sampler -> console.
  *
- * Phase B (not built yet — Wi-Fi/MQTT streaming and SD-card logging) will be
+ * Phase B (Wi-Fi/MQTT streaming and SD-card logging) will be
  * started right before console_start().
  * ========================================================================
  */

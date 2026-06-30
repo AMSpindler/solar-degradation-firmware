@@ -11,9 +11,10 @@
  * a reading is exactly these 16 bytes in this order. Keeping it small saves
  * Wi-Fi bandwidth when we stream lots of readings.
  *
- * NOTE for the HV lab phase: the AMC1311 voltage sensor is "differential", so
- * we temporarily store its second pin (VOUTN) in aux_channels[0] instead of a
- * photosensor. The real voltage is (voltage_raw - aux_channels[0]).
+ * NOTE for the HV lab phase: both sensors are "differential", so the two aux
+ * channels hold reference legs (not photosensors): aux[0] = AMC1311 VOUTN and
+ * aux[1] = HSTS016L Vref. The real signals are (voltage_raw - aux[0]) for volts
+ * and (current_raw - aux[1]) for amps.
  * ==========================================================================
  */
 #pragma once   /* "only include me once per file, even if asked twice" */
@@ -38,8 +39,8 @@
 typedef struct __attribute__((packed)) {
     uint64_t timestamp_us;                  /* microseconds since boot         */
     uint16_t voltage_raw;                   /* AMC1311 VOUTP raw ADC (0..4095) */
-    uint16_t current_raw;                   /* ACS724 raw ADC (0..4095)        */
-    uint16_t aux_channels[AUX_CHANNEL_COUNT]; /* aux[0]=VOUTN, aux[1]=spare    */
+    uint16_t current_raw;                   /* HSTS016L Vout raw ADC (0..4095) */
+    uint16_t aux_channels[AUX_CHANNEL_COUNT]; /* aux[0]=VOUTN, aux[1]=Vref     */
 } SamplePacket;
 
 /* A compile-time safety check: if SamplePacket is ever NOT 16 bytes (say
