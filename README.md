@@ -160,14 +160,24 @@ and set `MQTT_BROKER_URI`:
 
 ```bash
 brew install mosquitto && mosquitto -v          # run the broker
-mosquitto_sub -t 'clouds/#' -v                  # watch incoming messages
+mosquitto_sub -t 'clouds/#' -v                  # confirms batches arrive (raw bytes)
+```
+
+`mosquitto_sub` proves data is flowing but prints the payload as unreadable
+binary. To see decoded numbers (and save CSV), use the decoder — it subscribes to
+the broker, unpacks each batch, and prints a summary per batch:
+
+```bash
+pip3 install paho-mqtt                                    # one-time dependency
+python3 tools/mqtt_receiver.py --broker <PC-IP> --csv mqtt.csv
 ```
 
 **SD backup.** With a card wired (SPI pins in config.h), the firmware writes
 `samples_YYYYMMDD_HH.csv` to the card — one file per hour, columns
-`timestamp_us,voutp_raw,voutn_raw,current_raw,v_calc,i_calc,spare`. If no card is
+`timestamp_us,voutp_raw,voutn_raw,iout_raw,v_calc,i_calc,iref_raw`. If no card is
 present the firmware just logs a warning and keeps running. To verify the backup
-matches the network log, compare the SD CSV against `wifi.csv` for the same time.
+matches the network log, compare the SD CSV against `mqtt.csv`/`wifi.csv` for the
+same time.
 
 ---
 
