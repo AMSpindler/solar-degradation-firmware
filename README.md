@@ -31,8 +31,8 @@ All sampling is on **ADC1** only — ADC2 stops working once Wi-Fi is on.
 |--------|------|-------|
 | AMC1311 **VOUTP** (+) | GPIO1 | ADC1 channel 0 |
 | AMC1311 **VOUTN** (−) | GPIO2 | ADC1 channel 1 |
-| HSTS016L **Vout** (yellow) | GPIO3 | ADC1 channel 2 |
-| HSTS016L **Vref** (white) | GPIO4 | ADC1 channel 3 |
+| HSTS016L **Vout** (yellow) | GPIO6 | ADC1 channel 5 |
+| HSTS016L **Vref** (white) | GPIO5 | ADC1 channel 4 |
 | I2C **SDA** | GPIO8 | DS3231 *(confirm against your wiring)* |
 | I2C **SCL** | GPIO9 | DS3231 *(confirm against your wiring)* |
 | SD card (SPI) | 10–13 | *(confirm before use)* |
@@ -93,8 +93,10 @@ At the `clouds>` prompt:
 | `status` | Show sample rate, queue depth, RTC time, free memory, calibration |
 | `sample once` | Print one reading (raw counts, millivolts, calibrated value) |
 | `plot` / `plot off` | Start/stop a live `V_calc,I_calc` stream for a serial plotter |
+| `turns <n>` | Wire loops through the current sensor hole (physics amps ÷ turns) |
+| `avg <n>` | ADC reads averaged per sample to cut noise (1 = off; see below) |
 | `settime Y M D h m s` | Set the clock (UTC), saved to the DS3231 |
-| `reset cal` | Erase calibration (readings revert to raw counts) |
+| `reset cal` | Erase two-point calibration (current falls back to physics amps) |
 
 ### Calibrating (two-point)
 
@@ -114,12 +116,38 @@ Calibration is stored in NVS, so it survives power-off. With the HSTS016L the
 zero-current point reads Vout ≈ Vref (difference ≈ 0), and the signal moves
 ~31.25 mV/A (≈ 38 ADC counts per amp) from there.
 
+### Current amps: physics default + `turns`
+
+The current channel reads **real amps without calibrating**: when it is *not*
+two-point calibrated, the firmware converts with the datasheet physics
+`amps = (Vout − Vref, mV) / 31.25 mV/A / turns`. The `turns` count is how many
+times the current wire passes through the sensor's hole — a bench trick to make
+a small current readable on a 20 A sensor (loop it 10× → 10× signal → set
+`turns 10` and the firmware divides it back out). Set a standing value with
+`CURRENT_TURNS_DEFAULT` in config.h, or live with `turns <n>`. Running `cal i`
+overrides the physics with the (more accurate) two-point line, and the turn
+count is then baked into the slope.
+
+### Sample rate & averaging
+
+Two knobs trade off against each other:
+- **`SAMPLE_RATE_HZ_DEFAULT`** — how often a reading is produced (200 Hz = every 5 ms).
+- **`ADC_OVERSAMPLE_DEFAULT`** / `avg <n>` — how many ADC reads are averaged into
+  each reading. Noise drops by √n (avg 8 ≈ 2.8× cleaner).
+
+They share the ADC's fixed throughput: `rate × avg` is bounded, so each tick's
+work (≈ 4 channels × avg × ~75 µs) must fit the period, or the sampler starves
+the CPU and trips the task watchdog. Safe ceilings: **~8 at 200 Hz**, ~16 at
+100 Hz, ~4 at 500 Hz. Bench sweeps don't need speed — lower the rate and raise
+`avg` for cleaner data; deployment (catching cloud-shadow transients) favors the
+higher rate. The eventual fix for "fast *and* clean" is DMA (`adc_continuous`).
+
 ### Saving data to a CSV file
 
-Right now data travels **only over the USB cable** — the board prints it; it is
-not yet sent over Wi-Fi or written to an SD card (those are Phase B). To keep a
-record on your laptop, use the capture script in [`tools/`](tools/), which reads
-the `plot` stream and writes a clean CSV:
+There are two ways to record on your laptop: over **USB** (capture the `plot`
+stream, below) or over **Wi-Fi** (a receiver decodes the stream — see
+"Streaming over Wi-Fi"). For USB, use the capture script in
+[`tools/`](tools/), which reads the `plot` stream and writes a clean CSV:
 
 ```bash
 # Close `pio monitor` first — only one program can use the port at a time.
@@ -140,13 +168,21 @@ The firmware also sends each batch of readings over Wi-Fi and, independently,
 saves everything to the SD card. The sampler "fans out" a copy of every reading
 to the console, the Wi-Fi sender, and the SD logger, so they never interfere.
 
+Wi-Fi/SD are gated by `ENABLE_WIFI` / `ENABLE_SD` in config.h — set `ENABLE_WIFI 0`
+for quiet USB-only bench testing (no reconnect spam), `1` to use the network.
+
 **First, set your network details in [`include/config.h`](include/config.h):**
-`WIFI_SSID`, `WIFI_PASS`, and `UDP_DEST_IP` (your lab PC's IP address).
+- Home/hotspot (WPA2-PSK): `WIFI_SSID` + `WIFI_PASS`, leave `WIFI_ENTERPRISE 0`.
+- Campus (eduroam / MWireless — WPA2-Enterprise): set `WIFI_ENTERPRISE 1` and fill
+  `EAP_IDENTITY` / `EAP_USERNAME` / `EAP_PASSWORD` (uniqname for MWireless,
+  `uniqname@umich.edu` for eduroam). **Don't commit real credentials.**
+- `UDP_DEST_IP` / `MQTT_BROKER_URI`: your lab PC's **current** IP (re-check it each
+  session on campus Wi-Fi — it changes). The console `status` shows live wifi/mqtt state.
 
 **Wi-Fi via UDP (works immediately, no broker needed).** On the lab PC:
 
 ```bash
-python3 tools/udp_receiver.py --csv wifi.csv   # prints each batch as it arrives
+python3 tools/udp_receiver.py --csv wifi.csv --turns 10 --overwrite
 ```
 
 Power the board; you should see batches printed with sample counts and sequence
@@ -155,22 +191,33 @@ drop, which is fine because the SD card holds the complete record.
 
 **Wi-Fi via MQTT (reliable, needs a broker).** The esp-mqtt library is already
 vendored in [`components/mqtt/`](components/mqtt/) and enabled
-(`TRANSPORT_USE_MQTT` in config.h). To use it, install + run a broker on the PC
-and set `MQTT_BROKER_URI`:
+(`TRANSPORT_USE_MQTT` in config.h). Run a broker on the PC with the included
+config (Mosquitto 2.x refuses remote clients by default — [`mosquitto.conf`](mosquitto.conf)
+opens port 1883 to all interfaces + allows anonymous):
 
 ```bash
-brew install mosquitto && mosquitto -v          # run the broker
+mosquitto -c mosquitto.conf -v                  # broker, reachable by the ESP
 mosquitto_sub -t 'clouds/#' -v                  # confirms batches arrive (raw bytes)
 ```
 
 `mosquitto_sub` proves data is flowing but prints the payload as unreadable
-binary. To see decoded numbers (and save CSV), use the decoder — it subscribes to
-the broker, unpacks each batch, and prints a summary per batch:
+binary. To see decoded numbers (and save CSV), use the decoder:
 
 ```bash
 pip3 install paho-mqtt                                    # one-time dependency
-python3 tools/mqtt_receiver.py --broker <PC-IP> --csv mqtt.csv
+python3 tools/mqtt_receiver.py --broker <PC-IP> --csv mqtt.csv --turns 10 --overwrite
 ```
+
+**Receiver CSV columns** (both `udp_receiver.py` and `mqtt_receiver.py`):
+`device_id, seq, timestamp_us, voutp_raw, voutn_raw, iout_raw, iref_raw, v_diff,
+i_diff, v_volts, i_amps`. The firmware sends **raw counts**; the receiver converts
+to `v_volts` / `i_amps` on the PC side. Flags: `--turns N` (match your loop count),
+`--i-zero`/`--v-zero`/`--v-scale` (conversion tuning), `--overwrite` (fresh file per
+run vs. the default append). `mqtt_receiver.py` uses a persistent QoS-1 session, so
+if it crashes the broker replays the missed batches on restart.
+
+> **No SD card? No problem.** The Wi-Fi receiver writing a CSV replaces the need to
+> physically retrieve an SD card — data streams live and lands in a file on your PC.
 
 **SD backup.** With a card wired (SPI pins in config.h), the firmware writes
 `samples_YYYYMMDD_HH.csv` to the card — one file per hour, columns
@@ -191,7 +238,11 @@ same time.
 - ✅ USB serial console with live plotting and diagnostics
 - ✅ Sampler fan-out so console / Wi-Fi / SD each get every reading
 - ✅ **`wifi_transport`** — Wi-Fi (STA) with UDP **and** MQTT senders, batched, with exponential-backoff reconnect
+- ✅ **WPA2-Enterprise** (eduroam / MWireless) login, plus PSK for hotspot/home
 - ✅ **`sd_logger`** — SD-over-SPI backup logging (CSV, hourly rotation, buffered 10 s flush)
+- ✅ Physics amps conversion + `turns` (reads amps uncalibrated) and `avg` oversampling
+- ✅ `ENABLE_WIFI` / `ENABLE_SD` build toggles for quiet USB-only bench testing
+- ✅ Validated on the bench: current sweeps track `V/R`, cleanly, over Wi-Fi (USB unplugged)
 
 ### Not yet implemented
 - ⬜ DMA-based continuous ADC (`adc_continuous`) if 200 Hz one-shot proves jittery

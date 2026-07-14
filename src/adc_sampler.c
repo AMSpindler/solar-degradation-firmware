@@ -57,6 +57,12 @@ static cal_coeff_t               s_cal[CAL_CH_COUNT];
 static QueueHandle_t             s_subs[MAX_SAMPLE_SUBSCRIBERS];
 static int                       s_nsubs = 0;
 
+/* Wire passes through the current sensor hole (physics amps conversion). */
+static int                       s_turns = CURRENT_TURNS_DEFAULT;
+
+/* Reads averaged per sample (1 = off). Set live with the `avg` command. */
+static int                       s_oversample = ADC_OVERSAMPLE_DEFAULT;
+
 /* ------------------------------------------------------------------------- */
 /* Low-level reads                                                           */
 /* ------------------------------------------------------------------------- */
@@ -65,14 +71,18 @@ static int                       s_nsubs = 0;
  * to the compiler that this is tiny — don't worry about it. */
 static inline uint16_t read_raw(adc_channel_t ch)
 {
-    int raw = 0;
-    /* If the read fails, return 0. On the plotter, a stuck 0 line is an obvious
+    /* Average s_oversample reads to cut noise (s_oversample=1 => a single read).
+     * Failed reads are skipped. On the plotter, a stuck 0 line is an obvious
      * "something's wrong" signal. We deliberately do NOT print errors here:
      * this runs 200x/second, and printing that often would jam everything. */
-    if (adc_oneshot_read(s_adc, ch, &raw) != ESP_OK) {
-        return 0;
+    int raw, acc = 0, got = 0;
+    for (int i = 0; i < s_oversample; i++) {
+        if (adc_oneshot_read(s_adc, ch, &raw) == ESP_OK) {
+            acc += raw;
+            got++;
+        }
     }
-    return (uint16_t)raw;
+    return got ? (uint16_t)(acc / got) : 0;
 }
 
 /* Fill in one complete SamplePacket: a timestamp plus all four raw readings. */
@@ -371,11 +381,30 @@ esp_err_t adc_sampler_reset_cal(void)
     return err;
 }
 
+void adc_sampler_set_turns(int turns) { s_turns = (turns < 1) ? 1 : turns; }
+int  adc_sampler_get_turns(void) { return s_turns; }
+
+void adc_sampler_set_oversample(int n) { s_oversample = (n < 1) ? 1 : n; }
+int  adc_sampler_get_oversample(void) { return s_oversample; }
+
+/* Raw count -> millivolts via factory calibration (falls back to a linear
+ * estimate if unavailable). Internal float helper for the amps conversion. */
+static float chan_mv(uint16_t raw)
+{
+    int mv;
+    if (s_cali && adc_cali_raw_to_voltage(s_cali, raw, &mv) == ESP_OK) {
+        return (float)mv;
+    }
+    return (float)raw * 3300.0f / 4095.0f;
+}
+
 /*
- * Turn a raw packet into real engineering units (volts and amps) by applying
- * the calibration line. The pointers v_calc/i_calc are "out parameters": the
- * caller hands us addresses and we write the answers into them. We check for
- * NULL so a caller can ask for just one of the two.
+ * Turn a raw packet into real engineering units (volts and amps).
+ * Voltage: two-point calibration line (slope/offset).
+ * Current: if NOT two-point calibrated (slope=1, offset=0), use the datasheet
+ * physics — amps = (Vout - Vref in mV) / sensitivity / turns — so it reads real
+ * amps out of the box. Once `cal i` runs, the two-point line takes over (more
+ * accurate, with the turn count baked into the slope).
  */
 void adc_sampler_apply_cal(const SamplePacket *p, float *v_calc, float *i_calc)
 {
@@ -388,8 +417,13 @@ void adc_sampler_apply_cal(const SamplePacket *p, float *v_calc, float *i_calc)
                   + s_cal[CAL_CH_VOLTAGE].offset;
     }
     if (i_calc) {
-        *i_calc = s_cal[CAL_CH_CURRENT].slope * (float)i_diff
-                  + s_cal[CAL_CH_CURRENT].offset;
+        cal_coeff_t c = s_cal[CAL_CH_CURRENT];
+        if (c.slope == 1.0f && c.offset == 0.0f) {
+            float mv = chan_mv(p->current_raw) - chan_mv(p->aux_channels[1]);
+            *i_calc = mv / CURRENT_SENS_MV_PER_A / (float)s_turns;
+        } else {
+            *i_calc = c.slope * (float)i_diff + c.offset;
+        }
     }
 }
 

@@ -112,11 +112,15 @@ void app_main(void)
      *    sample stream so they get their own copy of every reading. Both are
      *    best-effort: if Wi-Fi can't connect or no SD card is present, the rest
      *    of the firmware keeps running. */
+#if ENABLE_WIFI
     wifi_transport_init();
     wifi_transport_start();
+#endif
+#if ENABLE_SD
     if (sd_logger_init() == ESP_OK) {
         sd_logger_start();
     }
+#endif
 
     /* 7. Now actually start sampling. From here a timer fires 200x/second on
      *    CPU core 0 and fans readings out to all subscribers. */

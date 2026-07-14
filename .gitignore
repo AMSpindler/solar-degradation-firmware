@@ -8,8 +8,10 @@
 sdkconfig.*
 !sdkconfig.defaults
 
-# Captured measurement data (CSV logs written by tools/capture_csv.py).
+# Captured measurement data (CSV logs from the capture/receiver tools).
 /data/
+/csv/
+*.DS_Store
 
 # Build-generated component manager lock file + editor workspace.
 dependencies.lock

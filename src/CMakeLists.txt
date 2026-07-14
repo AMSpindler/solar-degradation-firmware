@@ -18,6 +18,7 @@ idf_component_register(SRCS ${app_sources}
                                 esp_wifi
                                 esp_netif
                                 lwip
+                                wpa_supplicant   # WPA2-Enterprise (eduroam)
                                 esp_driver_spi
                                 esp_driver_sdspi
                                 sdmmc

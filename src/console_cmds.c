@@ -293,6 +293,44 @@ static int cmd_reset(int argc, char **argv)
 }
 
 /* ------------------------------------------------------------------------- */
+/* turns — how many times the wire loops through the current sensor hole      */
+/* ------------------------------------------------------------------------- */
+
+static int cmd_turns(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: turns <n>   (currently %d)\n", adc_sampler_get_turns());
+        return 0;
+    }
+    int n = atoi(argv[1]);
+    if (n < 1) n = 1;
+    adc_sampler_set_turns(n);
+    printf("turns = %d  (only affects amps when current is NOT `cal i` calibrated)\n", n);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------- */
+/* avg — reads averaged per sample (noise reduction)                          */
+/* ------------------------------------------------------------------------- */
+
+static int cmd_avg(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: avg <n>   (currently %d; 1 = off)\n", adc_sampler_get_oversample());
+        return 0;
+    }
+    int n = atoi(argv[1]);
+    if (n < 1) n = 1;
+    adc_sampler_set_oversample(n);
+    printf("avg = %d reads/sample\n", n);
+    if (n > 8) {
+        printf("  WARNING: >8 at 200 Hz can starve the CPU (task watchdog reset).\n");
+        printf("  For more averaging, lower the sample rate first.\n");
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------- */
 /* settime — set the clock (and save it to the DS3231)                        */
 /* ------------------------------------------------------------------------- */
 
@@ -352,14 +390,25 @@ static int cmd_status(int argc, char **argv)
     }
 
     /* Live I/O state — handy for spotting "why isn't data arriving?". */
+#if ENABLE_WIFI
     printf("wifi      : %s\n", wifi_transport_is_connected() ? "connected" : "down");
 #if TRANSPORT_USE_MQTT
     printf("mqtt      : %s\n", wifi_transport_mqtt_is_connected() ? "connected (broker)" : "down");
 #else
     printf("mqtt      : disabled\n");
 #endif
+#else
+    printf("wifi/mqtt : disabled (USB-only build)\n");
+#endif
+#if ENABLE_SD
     printf("SD card   : %s\n", sd_logger_is_mounted() ? "mounted" : "not mounted");
+#else
+    printf("SD card   : disabled\n");
+#endif
 
+    printf("turns     : %d  (current sensor loops through the hole)\n",
+           adc_sampler_get_turns());
+    printf("avg       : %d reads/sample\n", adc_sampler_get_oversample());
     for (int ch = 0; ch < CAL_CH_COUNT; ch++) {
         cal_coeff_t c;
         adc_sampler_get_cal(ch, &c);
@@ -402,8 +451,23 @@ void console_start(void)
     register_cmd("sample", "sample once : read one packet (raw + mV + calibrated)", cmd_sample);
     register_cmd("cal",    "cal [show|clear] | cal <v|i> point <known> | cal <v|i> solve", cmd_cal);
     register_cmd("reset",  "reset cal : restore identity calibration", cmd_reset);
+    register_cmd("turns",  "turns <n> : wire passes through the current sensor hole", cmd_turns);
+    register_cmd("avg",    "avg <n> : reads averaged per sample (1=off, cuts noise)", cmd_avg);
     register_cmd("settime","settime Y M D h m s : set DS3231 + system clock (UTC)", cmd_settime);
     register_cmd("status", "status : sampler/queue/RTC/heap/calibration", cmd_status);
+
+    /* Friendly banner so the commands are visible without knowing to type `help`. */
+    printf("\n=== CLOUDS firmware console ===\n");
+    printf("Commands (type `help` for full details):\n");
+    printf("  status         sampler / queue / RTC / wifi / mqtt / SD / calibration\n");
+    printf("  sample once    one reading: raw counts, mV, and calibrated V/I\n");
+    printf("  plot           live V_calc,I_calc CSV stream   (plot off to stop)\n");
+    printf("  cal <v|i> ...  two-point calibration  (point <known>, then solve)\n");
+    printf("  turns <n>      loops of wire through the current sensor hole\n");
+    printf("  avg <n>        reads averaged per sample (cuts noise; 1=off)\n");
+    printf("  reset cal      erase calibration (back to raw)\n");
+    printf("  settime Y M D h m s   set the clock (UTC)\n");
+    printf("  help           list every command\n\n");
 
     /* Start listening. From here, typing at the prompt triggers our commands. */
     ESP_ERROR_CHECK(esp_console_start_repl(repl));

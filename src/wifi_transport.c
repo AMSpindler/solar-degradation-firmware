@@ -29,6 +29,10 @@
 #include "esp_timer.h"
 #include "lwip/sockets.h"      /* UDP sockets */
 
+#if WIFI_ENTERPRISE
+#include "esp_eap_client.h"    /* WPA2-Enterprise (eduroam/MWireless) */
+#endif
+
 #if TRANSPORT_USE_MQTT
 #include "mqtt_client.h"
 #endif
@@ -98,12 +102,17 @@ static void reconnect_cb(void *arg)
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
 {
-    (void)arg; (void)data;
+    (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();                         /* first connect attempt */
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_wifi_connected = false;
-        ESP_LOGW(TAG, "Wi-Fi disconnected; retry in %lu ms", (unsigned long)s_backoff_ms);
+        /* reason code tells us WHY: 15=handshake timeout (bad password/PSK),
+         * 23=802.1X auth failed (bad EAP creds), 2/4=auth/assoc expire,
+         * 200/201=beacon/no-AP (out of range). */
+        wifi_event_sta_disconnected_t *d = (wifi_event_sta_disconnected_t *)data;
+        ESP_LOGW(TAG, "Wi-Fi disconnected (reason %d); retry in %lu ms",
+                 d ? d->reason : -1, (unsigned long)s_backoff_ms);
         /* Schedule a retry, then grow the wait (capped) for next time. */
         esp_timer_start_once(s_reconnect_timer, (uint64_t)s_backoff_ms * 1000);
         s_backoff_ms *= 2;
@@ -136,13 +145,26 @@ esp_err_t wifi_transport_init(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
-    /* Fill in the network name + password from config.h. */
+    /* Fill in the network name. For a normal password network we also set the
+     * password here; for WPA2-Enterprise the login is configured separately below. */
     wifi_config_t wc = {0};
     strncpy((char *)wc.sta.ssid, WIFI_SSID, sizeof(wc.sta.ssid) - 1);
+#if !WIFI_ENTERPRISE
     strncpy((char *)wc.sta.password, WIFI_PASS, sizeof(wc.sta.password) - 1);
+#endif
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+
+#if WIFI_ENTERPRISE
+    /* WPA2-Enterprise (802.1X, e.g. eduroam/MWireless): supply the campus
+     * identity/username/password, then switch the station into enterprise mode. */
+    ESP_ERROR_CHECK(esp_eap_client_set_identity((const uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY)));
+    ESP_ERROR_CHECK(esp_eap_client_set_username((const uint8_t *)EAP_USERNAME, strlen(EAP_USERNAME)));
+    ESP_ERROR_CHECK(esp_eap_client_set_password((const uint8_t *)EAP_PASSWORD, strlen(EAP_PASSWORD)));
+    ESP_ERROR_CHECK(esp_wifi_sta_enterprise_enable());
+    ESP_LOGI(TAG, "WPA2-Enterprise enabled for SSID %s", WIFI_SSID);
+#endif
 
     /* Create the (stopped) backoff timer used for reconnect attempts. */
     const esp_timer_create_args_t targs = { .callback = reconnect_cb, .name = "wifi_reconn" };

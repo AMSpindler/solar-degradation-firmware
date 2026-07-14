@@ -38,6 +38,13 @@
 #define CONSUMER_QUEUE_LEN       512           /* ~2.5 s buffer @200 Hz        */
 
 /* ----------------------------------------------------------------------------
+ * Subsystem enable — turn OFF for clean USB-only bench testing (no Wi-Fi/SD
+ * error spam in the console). Set back to 1 to use the network / SD path.
+ * ------------------------------------------------------------------------- */
+#define ENABLE_WIFI              1             /* Wi-Fi + UDP/MQTT transport   */
+#define ENABLE_SD                0             /* SD card backup logging       */
+
+/* ----------------------------------------------------------------------------
  * ADC  — ADC1 ONLY. ADC2 shares hardware with WiFi on the ESP32-S3 and its
  *        reads fail while WiFi is active, so all sampling stays on ADC1.
  *        ESP32-S3 ADC1 = GPIO1..GPIO10 (ADC1_CH0..CH9).
@@ -49,14 +56,27 @@
  * on the 20 A model) sits within the 3.3 V ADC range, so it wires in directly.
  * ------------------------------------------------------------------------- */
 #define ADC_UNIT                 ADC_UNIT_1
-#define ADC_VOLTAGE_P_CHANNEL    ADC_CHANNEL_0 /* GPIO1 — AMC1311 VOUTP (+)      */
-#define ADC_VOLTAGE_N_CHANNEL    ADC_CHANNEL_1 /* GPIO2 — AMC1311 VOUTN (-)      */
-#define ADC_CURRENT_CHANNEL      ADC_CHANNEL_2 /* GPIO3 — HSTS016L Vout (yellow) */
-#define ADC_CURRENT_REF_CHANNEL  ADC_CHANNEL_3 /* GPIO4 — HSTS016L Vref (white)  */
+#define ADC_VOLTAGE_P_CHANNEL    ADC_CHANNEL_0 /* AMC1311 VOUTP (+)      */
+#define ADC_VOLTAGE_N_CHANNEL    ADC_CHANNEL_1 /* AMC1311 VOUTN (-)      */
+#define ADC_CURRENT_CHANNEL      ADC_CHANNEL_5 /* HSTS016L Vout (yellow) */
+#define ADC_CURRENT_REF_CHANNEL  ADC_CHANNEL_4 /* HSTS016L Vref (white)  */
 #define ADC_ATTEN                ADC_ATTEN_DB_12 /* full-scale ~0..3.1 V        */
 #define ADC_BITWIDTH             ADC_BITWIDTH_12 /* 0..4095                     */
 
 #define ADC_READ_ONCE_AVG_N      500           /* samples averaged per cal point */
+
+/* Current sensor sensitivity, used to convert to amps when the current channel
+ * is NOT two-point calibrated (physics: amps = (Vout-Vref mV)/sens/turns).
+ * 20 A HSTS016L = 0.625 V / 20 A = 31.25 mV/A. */
+#define CURRENT_SENS_MV_PER_A    31.25f
+#define CURRENT_TURNS_DEFAULT    10             /* wire passes through sensor hole */
+
+/* ADC oversampling: reads averaged per sample to cut noise (1 = off). Each step
+ * multiplies ADC work per sample. At 200 Hz, ~8 is the safe ceiling (4 channels
+ * x 8 reads fits the 5 ms window); higher starves the CPU and trips the task
+ * watchdog. For MORE averaging, lower SAMPLE_RATE_HZ_DEFAULT (bench sweeps don't
+ * need 200 Hz). Change live with the `avg` command. */
+#define ADC_OVERSAMPLE_DEFAULT   8
 
 /* ----------------------------------------------------------------------------
  * I2C — DS3231 RTC + AT24C32 EEPROM module (shared bus, created in main).
@@ -85,8 +105,21 @@
 /* ----------------------------------------------------------------------------
  * WiFi  (Phase B). Fill in your lab network credentials.
  * ------------------------------------------------------------------------- */
-#define WIFI_SSID                "your-ssid"               /* FILL             */
-#define WIFI_PASS                "your-pass"               /* FILL             */
+#define WIFI_SSID                "eduroam"                 /* wifi name  */
+#define WIFI_PASS                "placeholder"             /* wifi password  */
+
+/* WPA2-Enterprise (campus networks: eduroam / MWireless). Set to 1 and fill in
+ * your UMich credentials to use 802.1X login instead of a simple password.
+ * Leave 0 for a normal password network (hotspot/home). WIFI_PASS is ignored
+ * when this is on. DO NOT commit real credentials to git. Note: even once
+ * connected, campus client-isolation may block the ESP32 from reaching a broker
+ * on your laptop. */
+#define WIFI_ENTERPRISE          1
+/* MWireless: use your uniqname (no @umich.edu). eduroam: use uniqname@umich.edu. */
+#define EAP_IDENTITY             "placeholder@umich.edu"    /* umich email */
+#define EAP_USERNAME             "placeholder@umich.edu"    /* umich email */
+#define EAP_PASSWORD             "placeholder"              /* umich password */
+
 /* Reconnect backoff: wait grows 1s -> 2s -> ... capped at 30s between tries.  */
 #define WIFI_RECONNECT_MIN_MS    1000
 #define WIFI_RECONNECT_MAX_MS    30000
@@ -100,11 +133,11 @@
 #define TRANSPORT_USE_MQTT       1             /* esp-mqtt vendored in components/mqtt */
 
 /* --- UDP: the ESP32 sends sample batches straight to this PC + port. --- */
-#define UDP_DEST_IP              "192.168.1.10"  /* FILL: your lab PC's IP      */
+#define UDP_DEST_IP              "35.3.223.124"  /* FILL: your lab PC's IP      */
 #define UDP_DEST_PORT            9000
 
 /* --- MQTT: publish to a Mosquitto broker. Topic includes the device id. --- */
-#define MQTT_BROKER_URI          "mqtt://192.168.1.10:1883" /* FILL            */
+#define MQTT_BROKER_URI          "mqtt://35.3.223.124:1883" /* FILL            */
 #define MQTT_TOPIC_FMT           "clouds/%08lX/samples"     /* device_id        */
 #define MQTT_QOS                 1
 

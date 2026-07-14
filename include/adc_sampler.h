@@ -55,6 +55,17 @@ esp_err_t adc_sampler_get_cal(int ch, cal_coeff_t *out);
 esp_err_t adc_sampler_set_cal(int ch, cal_coeff_t coeff);
 esp_err_t adc_sampler_reset_cal(void);
 
+/* Number of times the wire passes through the current sensor's hole. Used by
+ * the physics amps conversion (divides the effective current back out). Only
+ * matters when current is NOT two-point calibrated. */
+void adc_sampler_set_turns(int turns);
+int  adc_sampler_get_turns(void);
+
+/* Reads averaged per sample to cut noise (1 = off). Higher = cleaner but more
+ * ADC work; at 200 Hz keep <= ~16 or the sampler can't finish each 5 ms window. */
+void adc_sampler_set_oversample(int n);
+int  adc_sampler_get_oversample(void);
+
 /* Turn a raw packet into real volts and amps. v_calc/i_calc are where the
  * answers get written (pass NULL for one you don't need). */
 void adc_sampler_apply_cal(const SamplePacket *p, float *v_calc, float *i_calc);
