@@ -28,9 +28,11 @@ Usage (run on the PC where Mosquitto is running):
 Packet layout (must match include/sample_packet.h, little-endian):
   SampleBatchHeader: uint32 device_id, uint32 sequence_num,
                      uint16 sample_count, uint16 sample_rate_hz   (12 bytes)
-  SamplePacket  x N: uint64 timestamp_us, uint16 voutp, uint16 iout,
-                     uint16 voutn, uint16 iref                    (16 bytes each)
-  Both sensors are differential: voltage = voutp - voutn, current = iout - iref.
+  SamplePacket  x N: uint64 timestamp_us, uint16 vbus, uint16 iout,
+                     uint16 unused, uint16 iref                   (16 bytes each)
+  Voltage is now digital: `vbus` is the PAC1951's 16-bit VBUS count (read over
+  I2C on the firmware side), and the third field (old VOUTN leg) is unused/0.
+  Current is still differential: current = iout - iref.
 """
 import argparse
 import os
@@ -46,14 +48,17 @@ except ImportError:
 
 HEADER_FMT = "<IIHH"          # device_id, seq, count, rate
 HEADER_SIZE = struct.calcsize(HEADER_FMT)   # 12
-SAMPLE_FMT = "<QHHHH"         # timestamp_us, voutp, iout, voutn, iref
+SAMPLE_FMT = "<QHHHH"         # timestamp_us, vbus, iout, unused, iref
 SAMPLE_SIZE = struct.calcsize(SAMPLE_FMT)   # 16
+PAC_VBUS_FULL_SCALE = 65536.0  # PAC1951 VBUS is a 16-bit unipolar count
 
 # Shared state (kept in a dict so the MQTT callbacks can update it).
 state = {"csv": None, "total": 0, "last_seq": None,
          # conversion params (overridden from CLI args in main())
          "turns": 1, "i_sens": 31.25, "i_zero": 0.0,
-         "mv_per_count": 3300.0 / 4095.0, "v_scale": 1.0, "v_zero": 0.0}
+         "mv_per_count": 3300.0 / 4095.0,
+         # voltage: v = (vbus - v_zero)/65536 * v_fsr * v_divider
+         "v_fsr": 32.0, "v_divider": 1.0, "v_zero": 0.0}
 
 
 def _rc_ok(rc):
@@ -95,22 +100,23 @@ def on_message(client, userdata, msg):
         off = HEADER_SIZE + i * SAMPLE_SIZE
         if off + SAMPLE_SIZE > len(data):
             break
-        ts, voutp, iout, voutn, iref = struct.unpack_from(SAMPLE_FMT, data, off)
-        # Raw differential signals (the real measurement is the difference).
-        v_diff = voutp - voutn
+        ts, vbus, iout, _unused, iref = struct.unpack_from(SAMPLE_FMT, data, off)
+        # Voltage is a single digital PAC1951 VBUS count; current is still a
+        # differential (iout - iref).
         i_diff = iout - iref
-        # Convert to engineering units. Current uses the sensor's sensitivity
-        # and the turns count; voltage is left as raw diff (v_scale=1) until the
-        # AMC1311 divider/calibration is known. See the conversion CLI options.
-        v_volts = (v_diff - state["v_zero"]) * state["v_scale"]
+        # Convert to engineering units. Voltage: scale the VBUS count by the PAC
+        # full-scale (32 V) and the external HV divider ratio. Current: sensor
+        # sensitivity + turns. Defaults (divider=1) give volts at the PAC pin.
+        v_volts = ((vbus - state["v_zero"]) / PAC_VBUS_FULL_SCALE
+                   * state["v_fsr"] * state["v_divider"])
         i_amps = ((i_diff - state["i_zero"]) * state["mv_per_count"]
                   / state["i_sens"] / state["turns"])
         if first is None:
-            first = (v_diff, i_diff, v_volts, i_amps)
+            first = (vbus, i_diff, v_volts, i_amps)
         state["total"] += 1
         if state["csv"]:
-            state["csv"].write(f"{dev:08X},{seq},{ts},{voutp},{voutn},{iout},{iref},"
-                               f"{v_diff},{i_diff},{v_volts:.5f},{i_amps:.5f}\n")
+            state["csv"].write(f"{dev:08X},{seq},{ts},{vbus},{iout},{iref},"
+                               f"{i_diff},{v_volts:.5f},{i_amps:.5f}\n")
     if state["csv"]:
         state["csv"].flush()
 
@@ -137,11 +143,13 @@ def main():
                     help="current zero offset in raw counts (the i_diff read at 0 A)")
     ap.add_argument("--mv-per-count", type=float, default=3300.0 / 4095.0,
                     help="ADC millivolts per count (default 3300/4095)")
-    ap.add_argument("--v-scale", type=float, default=1.0,
-                    help="volts per raw v_diff count (1.0 = leave voltage as raw diff "
-                         "until the AMC1311 divider is calibrated)")
+    ap.add_argument("--v-fsr", type=float, default=32.0,
+                    help="PAC1951 VBUS full-scale range in volts (default 32)")
+    ap.add_argument("--v-divider", type=float, default=1.0,
+                    help="external HV divider ratio ahead of the PAC (e.g. 600V->30V "
+                         "=> ~20). Default 1 = report volts at the PAC pin")
     ap.add_argument("--v-zero", type=float, default=0.0,
-                    help="voltage zero offset in raw counts")
+                    help="voltage zero offset in raw VBUS counts (the count read at 0 V)")
     ap.add_argument("--overwrite", action="store_true",
                     help="start a FRESH CSV (truncate) instead of appending — one "
                          "file per run. Default appends (so crash-recovery fills gaps)")
@@ -151,7 +159,8 @@ def main():
     state["i_sens"] = args.i_sens
     state["i_zero"] = args.i_zero
     state["mv_per_count"] = args.mv_per_count
-    state["v_scale"] = args.v_scale
+    state["v_fsr"] = args.v_fsr
+    state["v_divider"] = args.v_divider
     state["v_zero"] = args.v_zero
 
     if args.csv:
@@ -162,8 +171,8 @@ def main():
             os.path.exists(args.csv) and os.path.getsize(args.csv) > 0)
         state["csv"] = open(args.csv, mode)
         if write_header:
-            state["csv"].write("device_id,seq,timestamp_us,voutp_raw,voutn_raw,iout_raw,iref_raw,"
-                           "v_diff,i_diff,v_volts,i_amps\n")
+            state["csv"].write("device_id,seq,timestamp_us,vbus_raw,iout_raw,iref_raw,"
+                           "i_diff,v_volts,i_amps\n")
 
     userdata = {"topic": args.topic}
     # Persistent session: a FIXED client_id + clean_session=False tells the broker

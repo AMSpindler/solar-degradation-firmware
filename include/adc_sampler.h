@@ -2,9 +2,9 @@
  * adc_sampler.h — the "menu" of functions the ADC sampler offers.
  *
  * Other files #include this to learn what adc_sampler.c can do. The actual code
- * is in adc_sampler.c. In short: it reads the AMC1311 (voltage) and HSTS016L
- * (current) sensors on a timer — both differential — drops readings on
- * g_sample_queue, and converts raw numbers to real units using saved calibration.
+ * is in adc_sampler.c. In short: it reads voltage from the PAC1951 (over I2C) and
+ * current from the HSTS016L (differential, on the ADC) on a timer, drops readings
+ * on g_sample_queue, and converts raw numbers to real units using saved calibration.
  */
 #pragma once
 

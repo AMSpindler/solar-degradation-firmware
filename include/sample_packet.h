@@ -11,10 +11,12 @@
  * a reading is exactly these 16 bytes in this order. Keeping it small saves
  * Wi-Fi bandwidth when we stream lots of readings.
  *
- * NOTE for the HV lab phase: both sensors are "differential", so the two aux
- * channels hold reference legs (not photosensors): aux[0] = AMC1311 VOUTN and
- * aux[1] = HSTS016L Vref. The real signals are (voltage_raw - aux[0]) for volts
- * and (current_raw - aux[1]) for amps.
+ * NOTE for the HV lab phase: the layout is unchanged (still 16 bytes) but the
+ * VOLTAGE field now carries a digital reading, not an analog one. voltage_raw is
+ * the PAC1951's 16-bit VBUS count (read over I2C); the old VOUTN leg is gone, so
+ * aux[0] is unused (always 0). Current is still differential: aux[1] = HSTS016L
+ * Vref, and the current signal is (current_raw - aux[1]). Voltage in real units
+ * is voltage_raw scaled by `cal v` (which folds in the external HV divider).
  * ==========================================================================
  */
 #pragma once   /* "only include me once per file, even if asked twice" */
@@ -37,10 +39,10 @@
  * so the laptop side can rely on it.
  */
 typedef struct __attribute__((packed)) {
-    uint64_t timestamp_us;                  /* microseconds since boot         */
-    uint16_t voltage_raw;                   /* AMC1311 VOUTP raw ADC (0..4095) */
-    uint16_t current_raw;                   /* HSTS016L Vout raw ADC (0..4095) */
-    uint16_t aux_channels[AUX_CHANNEL_COUNT]; /* aux[0]=VOUTN, aux[1]=Vref     */
+    uint64_t timestamp_us;                  /* microseconds since boot          */
+    uint16_t voltage_raw;                   /* PAC1951 VBUS count (0..65535, I2C)*/
+    uint16_t current_raw;                   /* HSTS016L Vout raw ADC (0..4095)  */
+    uint16_t aux_channels[AUX_CHANNEL_COUNT]; /* aux[0]=unused(0), aux[1]=Vref  */
 } SamplePacket;
 
 /* A compile-time safety check: if SamplePacket is ever NOT 16 bytes (say

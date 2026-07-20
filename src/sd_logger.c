@@ -132,7 +132,7 @@ static FILE *ensure_file_open(void)
     /* Use our own big buffer so the card is written in ~4 KB chunks. */
     setvbuf(s_file, s_iobuf, _IOFBF, sizeof(s_iobuf));
     if (is_new) {
-        fprintf(s_file, "timestamp_us,voutp_raw,voutn_raw,iout_raw,v_calc,i_calc,iref_raw\n");
+        fprintf(s_file, "timestamp_us,vbus_raw,iout_raw,v_calc,i_calc,iref_raw\n");
     }
     s_cur_hour = t.tm_hour;
     ESP_LOGI(TAG, "logging to %s", path);
@@ -157,9 +157,10 @@ static void writer_task(void *arg)
             if (f != NULL) {
                 float v, i;
                 adc_sampler_apply_cal(&p, &v, &i);
-                fprintf(f, "%llu,%u,%u,%u,%.5f,%.5f,%u\n",
+                /* vbus_raw = PAC1951 VBUS count; aux[0] (old VOUTN) is dropped. */
+                fprintf(f, "%llu,%u,%u,%.5f,%.5f,%u\n",
                         (unsigned long long)p.timestamp_us,
-                        p.voltage_raw, p.aux_channels[0], p.current_raw,
+                        p.voltage_raw, p.current_raw,
                         v, i, p.aux_channels[1]);
             }
         }

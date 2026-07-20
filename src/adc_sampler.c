@@ -7,15 +7,18 @@
  * chip's ADC gives a number from 0 to 4095 (that's "12-bit"), where 0 means
  * ~0 V and 4095 means the top of the range (~3.1 V here).
  *
- * We read two differential sensors every sample (four ADC channels):
- *   - AMC1311 VOUTP and VOUTN  (voltage; the signal is the difference VOUTP - VOUTN)
- *   - HSTS016L Vout and Vref   (current; the signal is the difference Vout - Vref)
- *   "Differential" means the real reading is the gap between the two pins, which
- *   cancels offset/supply drift shared by both.
+ * Each sample now comes from TWO different places:
+ *   - VOLTAGE: read as a digital number from the PAC1951 monitor over I2C (it
+ *     has its own ADC). This replaced the old AMC1311 analog path — the ESP32
+ *     ADC no longer measures voltage at all.
+ *   - CURRENT: still the HSTS016L, a differential analog sensor (Vout and Vref)
+ *     read on two ESP32 ADC channels; the signal is the difference Vout - Vref.
+ *     "Differential" means the real reading is the gap between the two pins,
+ *     which cancels offset/supply drift shared by both.
  *
- * A hardware timer fires 200 times per second. Each time, our callback reads
- * the ADC, packs the numbers into a SamplePacket, and drops it on a "queue"
- * (a thread-safe conveyor belt) for other code to pick up.
+ * A hardware timer fires 200 times per second. Each time, our callback reads the
+ * PAC1951 (I2C) and the current ADC channels, packs the numbers into a
+ * SamplePacket, and drops it on a "queue" (a thread-safe conveyor belt).
  *
  * IMPORTANT: we only use ADC1. The ESP32's other ADC ("ADC2") shares circuitry
  * with Wi-Fi and stops working once Wi-Fi turns on, so we avoid it.
@@ -23,6 +26,7 @@
  */
 #include "adc_sampler.h"
 #include "config.h"
+#include "pac1951.h"                 /* voltage now comes from the PAC1951    */
 
 #include <string.h>
 #include "esp_log.h"
@@ -85,14 +89,27 @@ static inline uint16_t read_raw(adc_channel_t ch)
     return got ? (uint16_t)(acc / got) : 0;
 }
 
-/* Fill in one complete SamplePacket: a timestamp plus all four raw readings. */
+/* Fill in one complete SamplePacket: a timestamp, the PAC1951 voltage (I2C),
+ * and the two current ADC legs. */
 static void build_packet(SamplePacket *p)
 {
-    /* esp_timer_get_time() = microseconds since the chip booted. 
+    /* esp_timer_get_time() = microseconds since the chip booted.
      * Good for measuring exact spacing between samples. */
     p->timestamp_us    = (uint64_t)esp_timer_get_time();
-    p->voltage_raw     = read_raw(ADC_VOLTAGE_P_CHANNEL);  /* AMC1311 VOUTP */
-    p->aux_channels[0] = read_raw(ADC_VOLTAGE_N_CHANNEL);  /* AMC1311 VOUTN */
+
+    /* VOLTAGE over I2C: read the value the PAC refreshed on the PREVIOUS tick,
+     * then ask it to refresh for the NEXT tick. This "pipelining" keeps the loop
+     * from blocking on a conversion. If the read fails, leave 0 (an obvious
+     * "something's wrong" flatline, same as a stuck ADC). aux[0] is unused now
+     * (the old VOUTN leg is gone) — keep it 0 so the differential in apply_cal
+     * reduces to just the VBUS value. */
+    uint16_t vbus = 0;
+    (void)pac1951_read_vbus_raw(&vbus);
+    p->voltage_raw     = vbus;
+    p->aux_channels[0] = 0;
+    (void)pac1951_refresh_v();  /* prime the next read */
+
+    /* CURRENT still on the ESP32 ADC (unchanged). */
     p->current_raw     = read_raw(ADC_CURRENT_CHANNEL);     /* HSTS016L Vout */
     p->aux_channels[1] = read_raw(ADC_CURRENT_REF_CHANNEL); /* HSTS016L Vref */
 }
@@ -222,9 +239,10 @@ esp_err_t adc_sampler_init(uint16_t sample_rate_hz)
     /* Configure each channel we read. "atten" (attenuation) sets the voltage
      * range; DB_12 gives the widest range (~0..3.1 V). "bitwidth" = 12 bits. */
     adc_oneshot_chan_cfg_t chan_cfg = { .atten = ADC_ATTEN, .bitwidth = ADC_BITWIDTH };
+    /* Only the current sensor is on the ADC now; voltage comes from the PAC1951
+     * over I2C (registered separately in main.c via pac1951_init). */
     const adc_channel_t channels[] = {
-        ADC_VOLTAGE_P_CHANNEL, ADC_VOLTAGE_N_CHANNEL,
-        ADC_CURRENT_CHANNEL,   ADC_CURRENT_REF_CHANNEL,
+        ADC_CURRENT_CHANNEL, ADC_CURRENT_REF_CHANNEL,
     };
     /* Loop over the list and configure each one. sizeof(arr)/sizeof(arr[0])
      * is the classic C way to count items in an array. */
@@ -310,9 +328,10 @@ esp_err_t adc_sampler_read_once(SamplePacket *out)
 }
 
 /*
- * Average several voltage readings. Averaging cancels out random noise so the
- * calibration math is steadier. Returns the averaged DIFFERENCE (VOUTP-VOUTN),
- * because that difference is the real voltage signal.
+ * Average several voltage readings for calibration. The PAC1951 already keeps an
+ * 8-sample rolling average of VBUS on-chip; we read that a few times and average
+ * again to further steady the `cal v` math. Returns the averaged raw VBUS count
+ * (there is no differential leg anymore — the PAC gives a single value).
  */
 esp_err_t adc_sampler_average_voltage_raw(int n, float *out_diff)
 {
@@ -320,13 +339,16 @@ esp_err_t adc_sampler_average_voltage_raw(int n, float *out_diff)
         return ESP_ERR_INVALID_ARG;
     }
     double acc = 0.0;  /* running total; double = high-precision decimal */
+    int got = 0;
     for (int i = 0; i < n; i++) {
-        int p = read_raw(ADC_VOLTAGE_P_CHANNEL);
-        int q = read_raw(ADC_VOLTAGE_N_CHANNEL);
-        acc += (double)(p - q);
+        uint16_t vbus = 0;
+        if (pac1951_read_vbus_avg_raw(&vbus) == ESP_OK) {
+            acc += (double)vbus;
+            got++;
+        }
     }
-    *out_diff = (float)(acc / n);  /* total / count = average */
-    return ESP_OK;
+    *out_diff = got ? (float)(acc / got) : 0.0f;  /* total / count = average */
+    return got ? ESP_OK : ESP_FAIL;
 }
 
 /* Same idea for the current sensor. Returns the averaged DIFFERENCE
@@ -408,8 +430,10 @@ static float chan_mv(uint16_t raw)
  */
 void adc_sampler_apply_cal(const SamplePacket *p, float *v_calc, float *i_calc)
 {
-    /* Both signals are a difference between a sensor's two output legs:
-     * voltage = VOUTP - VOUTN, current = Vout - Vref. */
+    /* Voltage is now a single PAC1951 count (aux[0] is 0, so this v_diff is just
+     * voltage_raw). Current is still a differential: Vout - Vref. The two-point
+     * `cal v` slope maps the raw VBUS count -> real volts and absorbs the
+     * external 600 V->32 V hardware divider. */
     int v_diff = (int)p->voltage_raw - (int)p->aux_channels[0];
     int i_diff = (int)p->current_raw - (int)p->aux_channels[1];
     if (v_calc) {

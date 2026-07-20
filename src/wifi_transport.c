@@ -65,6 +65,7 @@ static struct sockaddr_in s_udp_dest;
 static esp_mqtt_client_handle_t s_mqtt = NULL;
 static volatile bool            s_mqtt_connected = false;
 static char                     s_mqtt_topic[64];
+static char                     s_mqtt_status_topic[64];   /* presence: online/offline */
 
 /* esp-mqtt tells us when the broker connection comes and goes. */
 static void mqtt_event_handler(void *args, esp_event_base_t base,
@@ -75,6 +76,11 @@ static void mqtt_event_handler(void *args, esp_event_base_t base,
     case MQTT_EVENT_CONNECTED:
         s_mqtt_connected = true;
         ESP_LOGI(TAG, "MQTT broker connected");
+        /* "Birth" message: announce we're online. RETAINED so a PC that
+         * subscribes later still sees it. This overwrites any stale "offline"
+         * the broker published from our Last Will on a previous drop. */
+        esp_mqtt_client_publish(s_mqtt, s_mqtt_status_topic,
+                                MQTT_STATUS_ONLINE, 0, MQTT_QOS, /*retain=*/1);
         break;
     case MQTT_EVENT_DISCONNECTED:
         s_mqtt_connected = false;
@@ -189,7 +195,19 @@ esp_err_t wifi_transport_init(void)
 
 #if TRANSPORT_USE_MQTT
     snprintf(s_mqtt_topic, sizeof(s_mqtt_topic), MQTT_TOPIC_FMT, (unsigned long)DEVICE_ID);
-    esp_mqtt_client_config_t mcfg = { .broker.address.uri = MQTT_BROKER_URI };
+    snprintf(s_mqtt_status_topic, sizeof(s_mqtt_status_topic),
+             MQTT_STATUS_TOPIC_FMT, (unsigned long)DEVICE_ID);
+    /* Last Will & Testament: the broker publishes this RETAINED "offline" to the
+     * status topic on our behalf if we disconnect ungracefully (Wi-Fi/power/crash).
+     * esp-mqtt copies these strings internally, so the static buffer is safe. */
+    esp_mqtt_client_config_t mcfg = {
+        .broker.address.uri              = MQTT_BROKER_URI,
+        .session.last_will.topic         = s_mqtt_status_topic,
+        .session.last_will.msg           = MQTT_STATUS_OFFLINE,
+        .session.last_will.msg_len       = 0,   /* 0 = derive length from string */
+        .session.last_will.qos           = MQTT_QOS,
+        .session.last_will.retain        = 1,
+    };
     s_mqtt = esp_mqtt_client_init(&mcfg);
     if (s_mqtt) {
         /* esp-mqtt handles its own reconnects once started. */

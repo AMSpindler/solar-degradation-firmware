@@ -25,6 +25,7 @@
 #include "sample_packet.h"   /* the shape of one sensor reading             */
 #include "adc_sampler.h"     /* reads the voltage/current sensors           */
 #include "rtc_clock.h"       /* the DS3231 real-time clock chip             */
+#include "pac1951.h"         /* PAC1951 voltage monitor (I2C, via ISO1540)  */
 #include "console_cmds.h"    /* the text commands you type over USB         */
 #include "wifi_transport.h"  /* Phase B: send sample batches over Wi-Fi      */
 #include "sd_logger.h"       /* Phase B: backup logging to the SD card       */
@@ -98,6 +99,13 @@ void app_main(void)
         rtc_clock_start_resync_task();  /* re-check the time every 10 minutes */
     } else {
         ESP_LOGW(TAG, "DS3231 init failed; continuing without RTC");
+    }
+
+    /* 3b. Register the PAC1951 voltage monitor on the SAME I2C bus (through the
+     *     ISO1540 isolator). If it isn't wired up yet, keep going — voltage
+     *     reads will just come back 0 until it's connected. */
+    if (pac1951_init(i2c_bus) != ESP_OK) {
+        ESP_LOGW(TAG, "PAC1951 init failed; voltage will read 0 until wired");
     }
 
     /* 4. Set up the ADC sampler. This creates the "queue" (a conveyor belt

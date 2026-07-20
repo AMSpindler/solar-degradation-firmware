@@ -8,10 +8,14 @@
 sdkconfig.*
 !sdkconfig.defaults
 
-# Captured measurement data (CSV logs from the capture/receiver tools).
+# Captured measurement data. /data/ (raw capture dumps) stays ignored, but the
+# curated csv/ analysis set (bench CSVs + MATLAB plot) is tracked on purpose.
 /data/
-/csv/
 *.DS_Store
+
+# Python bytecode cache from the receiver/analysis tools.
+__pycache__/
+*.pyc
 
 # Build-generated component manager lock file + editor workspace.
 dependencies.lock

@@ -45,19 +45,21 @@
 #define ENABLE_SD                0             /* SD card backup logging       */
 
 /* ----------------------------------------------------------------------------
- * ADC  — ADC1 ONLY. ADC2 shares hardware with WiFi on the ESP32-S3 and its
- *        reads fail while WiFi is active, so all sampling stays on ADC1.
- *        ESP32-S3 ADC1 = GPIO1..GPIO10 (ADC1_CH0..CH9).
+ * ADC  — ADC1 ONLY, and now CURRENT ONLY. ADC2 shares hardware with WiFi on the
+ *        ESP32-S3 and its reads fail while WiFi is active, so all sampling stays
+ *        on ADC1. ESP32-S3 ADC1 = GPIO1..GPIO10 (ADC1_CH0..CH9).
  *
- * Both sensors are DIFFERENTIAL. The AMC1311 voltage output is VOUTP/VOUTN; the
- * HSTS016L current output is Vout/Vref (its white reference lead). The firmware
- * reads each pair on two channels and uses the difference: (VOUTP - VOUTN) and
+ * VOLTAGE is no longer read here. It moved off the ESP32 ADC (the old AMC1311
+ * analog path) onto the PAC1951 power monitor, which digitizes the bus voltage
+ * itself and is read over I2C through the ISO1540 isolator (see the PAC1951
+ * block below). Only the current sensor still uses the ADC.
+ *
+ * The HSTS016L current output is DIFFERENTIAL — Vout/Vref (its white reference
+ * lead). The firmware reads the pair on two channels and uses the difference
  * (Vout - Vref). The HSTS016L runs on 5 V; its 2.5 V±0.625 V output (≈31.25 mV/A
  * on the 20 A model) sits within the 3.3 V ADC range, so it wires in directly.
  * ------------------------------------------------------------------------- */
 #define ADC_UNIT                 ADC_UNIT_1
-#define ADC_VOLTAGE_P_CHANNEL    ADC_CHANNEL_0 /* AMC1311 VOUTP (+)      */
-#define ADC_VOLTAGE_N_CHANNEL    ADC_CHANNEL_1 /* AMC1311 VOUTN (-)      */
 #define ADC_CURRENT_CHANNEL      ADC_CHANNEL_5 /* HSTS016L Vout (yellow) */
 #define ADC_CURRENT_REF_CHANNEL  ADC_CHANNEL_4 /* HSTS016L Vref (white)  */
 #define ADC_ATTEN                ADC_ATTEN_DB_12 /* full-scale ~0..3.1 V        */
@@ -89,6 +91,28 @@
 #define AT24C32_ADDR             0x57
 
 /* ----------------------------------------------------------------------------
+ * PAC1951 voltage monitor — the AMC1311 replacement. Sits on the 600 V side and
+ * digitizes the bus voltage (VBUS) with its own 16-bit ADC; the ESP32 reads it
+ * over the SAME I2C bus above, through an ISO1540 isolator that carries SDA/SCL
+ * across the HV barrier (the ISO1540 needs no firmware — it is transparent).
+ *
+ * Address is set by the resistor on the PAC's ADDRSEL pin (range 0x10..0x1F);
+ * 0x10 = ADDRSEL tied to GND. No collision with the DS3231 (0x68).
+ *
+ * The PAC's VBUS input maxes at 32 V, so an external divider brings the 600 V
+ * bus down to <=32 V. Firmware does NOT hardcode that divider ratio: it reports
+ * the raw 16-bit VBUS register and the two-point `cal v` slope absorbs the
+ * divider (see adc_sampler_apply_cal). FSR/full-scale below are for reference.
+ * ------------------------------------------------------------------------- */
+#define PAC1951_ADDR             0x10          /* ADDRSEL->GND. CONFIRM strap   */
+#define PAC1951_REG_REFRESH      0x00          /* Send Byte: refresh + reset acc*/
+#define PAC1951_REG_VBUS         0x07          /* VBUS1 result (16-bit, MSB 1st)*/
+#define PAC1951_REG_VBUS_AVG     0x0F          /* VBUS1 rolling 8-sample average */
+#define PAC1951_REG_REFRESH_V    0x1F          /* Send Byte: refresh, keep acc  */
+#define PAC1951_VBUS_FSR_V       32.0f         /* default VBUS full-scale range  */
+#define PAC1951_VBUS_FULL_SCALE  65536.0f      /* 16-bit unipolar counts         */
+
+/* ----------------------------------------------------------------------------
  * SD card over SPI  (Phase B backup logging).
  * SD pins MUST NOT collide with the ADC1 channels above (GPIO1..GPIO4).
  * ------------------------------------------------------------------------- */
@@ -106,7 +130,7 @@
  * WiFi  (Phase B). Fill in your lab network credentials.
  * ------------------------------------------------------------------------- */
 #define WIFI_SSID                "eduroam"                 /* wifi name  */
-#define WIFI_PASS                "placeholder"             /* wifi password  */
+#define WIFI_PASS                "YOUR_WIFI_PASSWORD"          /* wifi password  */
 
 /* WPA2-Enterprise (campus networks: eduroam / MWireless). Set to 1 and fill in
  * your UMich credentials to use 802.1X login instead of a simple password.
@@ -116,9 +140,9 @@
  * on your laptop. */
 #define WIFI_ENTERPRISE          1
 /* MWireless: use your uniqname (no @umich.edu). eduroam: use uniqname@umich.edu. */
-#define EAP_IDENTITY             "placeholder@umich.edu"    /* umich email */
-#define EAP_USERNAME             "placeholder@umich.edu"    /* umich email */
-#define EAP_PASSWORD             "placeholder"              /* umich password */
+#define EAP_IDENTITY             "uniqname@umich.edu"    /* umich email */
+#define EAP_USERNAME             "uniqname@umich.edu"    /* umich email */
+#define EAP_PASSWORD             "YOUR_UMICH_PASSWORD"          /* umich password */
 
 /* Reconnect backoff: wait grows 1s -> 2s -> ... capped at 30s between tries.  */
 #define WIFI_RECONNECT_MIN_MS    1000
@@ -140,6 +164,16 @@
 #define MQTT_BROKER_URI          "mqtt://35.3.223.124:1883" /* FILL            */
 #define MQTT_TOPIC_FMT           "clouds/%08lX/samples"     /* device_id        */
 #define MQTT_QOS                 1
+
+/* Online/offline status ("presence") topic. The board publishes RETAINED
+ * "online" when it connects; it also arms an MQTT Last Will so the BROKER
+ * publishes RETAINED "offline" automatically if the board drops (Wi-Fi loss,
+ * power loss, crash). Watch it from the PC with no USB needed:
+ *     mosquitto_sub -t 'clouds/+/status' -v
+ * Retained = a client that subscribes late still sees the last known state. */
+#define MQTT_STATUS_TOPIC_FMT    "clouds/%08lX/status"      /* device_id        */
+#define MQTT_STATUS_ONLINE       "online"
+#define MQTT_STATUS_OFFLINE      "offline"
 
 /* ----------------------------------------------------------------------------
  * Task placement (FreeRTOS).  Core 0 = real-time sampling, Core 1 = I/O.

@@ -18,28 +18,30 @@ and a live serial-plotter view, with Wi-Fi + SD validated during the 500 V soak.
 | Component | Role | How it connects |
 |-----------|------|-----------------|
 | **ESP32-S3-DevKitC-N8R2** | The microcontroller running this firmware (8 MB flash, 2 MB PSRAM, dual-core) | USB-C to the laptop |
-| **AMC1311** isolation amplifier | Measures the high-voltage side safely and outputs a small **differential** voltage (VOUTP, VOUTN) | Two ADC1 pins |
+| **PAC1951** voltage monitor | Digitizes the high-voltage bus (VBUS) with its own 16-bit ADC and reports it over I2C — replaced the analog AMC1311. Its 32 V input sees the 600 V bus through an external divider. | I2C (0x10), via ISO1540 |
+| **ISO1540** I2C isolator | Carries SDA/SCL across the HV isolation barrier so the ESP32 can read the PAC1951 safely. Firmware-transparent (no driver). | Inline on the I2C bus |
 | **HSTS016L** Hall current sensor (20 A, 2.5 V±0.625 V ≈ 31.25 mV/A) | Measures current; **differential** output Vout (yellow) vs Vref (white). Powered at **5 V** (red V+, black 0 V) | Two ADC1 pins |
 | **DS3231 + AT24C32** RTC module | Battery-backed real-time clock so timestamps are correct across reboots | I2C (2 wires) |
 | **micro-SD module (SPI)** | Backup logging | SPI |
 
 ### Pin map (defined in [`include/config.h`](include/config.h))
 
-All sampling is on **ADC1** only — ADC2 stops working once Wi-Fi is on.
+Current is on **ADC1** only (ADC2 stops working once Wi-Fi is on). Voltage is no
+longer on the ADC at all — it's read digitally from the PAC1951 over I2C.
 
 | Signal | GPIO | Notes |
 |--------|------|-------|
-| AMC1311 **VOUTP** (+) | GPIO1 | ADC1 channel 0 |
-| AMC1311 **VOUTN** (−) | GPIO2 | ADC1 channel 1 |
 | HSTS016L **Vout** (yellow) | GPIO6 | ADC1 channel 5 |
 | HSTS016L **Vref** (white) | GPIO5 | ADC1 channel 4 |
-| I2C **SDA** | GPIO8 | DS3231 *(confirm against your wiring)* |
-| I2C **SCL** | GPIO9 | DS3231 *(confirm against your wiring)* |
+| I2C **SDA** | GPIO8 | DS3231 (0x68) + PAC1951 (0x10, via ISO1540) *(confirm wiring)* |
+| I2C **SCL** | GPIO9 | shared I2C clock *(confirm wiring)* |
 | SD card (SPI) | 10–13 | *(confirm before use)* |
 
-Both sensors are differential: the real signals are **VOUTP − VOUTN** (volts) and
-**Vout − Vref** (amps). The HSTS016L needs **5 V** power, but its 2.5 V-centered
-outputs stay under 3.3 V, so they connect straight to the ADC pins.
+Voltage now comes from the **PAC1951** as a raw 16-bit VBUS count over I2C; the
+external 600 V→≤32 V divider ratio is folded into the `cal v` slope (no hardcoded
+ratio). Current is still **differential** — the real signal is **Vout − Vref**
+(amps). The HSTS016L needs **5 V** power, but its 2.5 V-centered outputs stay
+under 3.3 V, so they connect straight to the ADC pins.
 
 ---
 
@@ -49,7 +51,8 @@ At boot, [`src/main.c`](src/main.c) sets everything up in order, then hands off
 to two background "tasks": the sampling timer and the console.
 
 ```
-   [AMC1311 + HSTS016L] --analog--> ADC1
+   [PAC1951] --I2C (via ISO1540)-->  \
+   [HSTS016L] --analog--> ADC1 -----> adc_sampler
                                    |
                                    v
         esp_timer fires 200x/sec -> adc_sampler reads + timestamps
@@ -66,7 +69,8 @@ to two background "tasks": the sampling timer and the console.
 | File | What it does |
 |------|--------------|
 | [`src/main.c`](src/main.c) | Entry point. Initializes NVS, I2C, the RTC, and the ADC sampler, starts the console, then starts sampling. |
-| [`src/adc_sampler.c`](src/adc_sampler.c) | Reads the AMC1311/HSTS016L on a 200 Hz timer, pushes readings to the queue, and handles calibration (raw → volts/amps). |
+| [`src/adc_sampler.c`](src/adc_sampler.c) | Reads voltage from the PAC1951 (I2C) and current from the HSTS016L (ADC) on a 200 Hz timer, pushes readings to the queue, and handles calibration (raw → volts/amps). |
+| [`src/pac1951.c`](src/pac1951.c) | Talks to the PAC1951 voltage monitor over I2C (through the ISO1540 isolator): refresh + read VBUS. |
 | [`src/rtc_clock.c`](src/rtc_clock.c) | Talks to the DS3231 over I2C. Sets the system clock at boot and re-syncs every 10 minutes. |
 | [`src/console_cmds.c`](src/console_cmds.c) | The `clouds>` USB prompt and all its commands (plot, sample, cal, status, …). |
 | [`include/config.h`](include/config.h) | **All** pin numbers and settings in one place — start here to change hardware wiring. |
@@ -209,19 +213,20 @@ python3 tools/mqtt_receiver.py --broker <PC-IP> --csv mqtt.csv --turns 10 --over
 ```
 
 **Receiver CSV columns** (both `udp_receiver.py` and `mqtt_receiver.py`):
-`device_id, seq, timestamp_us, voutp_raw, voutn_raw, iout_raw, iref_raw, v_diff,
-i_diff, v_volts, i_amps`. The firmware sends **raw counts**; the receiver converts
-to `v_volts` / `i_amps` on the PC side. Flags: `--turns N` (match your loop count),
-`--i-zero`/`--v-zero`/`--v-scale` (conversion tuning), `--overwrite` (fresh file per
-run vs. the default append). `mqtt_receiver.py` uses a persistent QoS-1 session, so
-if it crashes the broker replays the missed batches on restart.
+`device_id, seq, timestamp_us, vbus_raw, iout_raw, iref_raw, i_diff, v_volts,
+i_amps`. The firmware sends **raw counts** (`vbus_raw` is the PAC1951 VBUS count);
+the receiver converts to `v_volts` / `i_amps` on the PC side. Flags: `--turns N`
+(match your loop count), `--i-zero` (current zero), `--v-fsr`/`--v-divider`/`--v-zero`
+(voltage scaling: VBUS→volts through the external HV divider), `--overwrite` (fresh
+file per run vs. the default append). `mqtt_receiver.py` uses a persistent QoS-1
+session, so if it crashes the broker replays the missed batches on restart.
 
 > **No SD card? No problem.** The Wi-Fi receiver writing a CSV replaces the need to
 > physically retrieve an SD card — data streams live and lands in a file on your PC.
 
 **SD backup.** With a card wired (SPI pins in config.h), the firmware writes
 `samples_YYYYMMDD_HH.csv` to the card — one file per hour, columns
-`timestamp_us,voutp_raw,voutn_raw,iout_raw,v_calc,i_calc,iref_raw`. If no card is
+`timestamp_us,vbus_raw,iout_raw,v_calc,i_calc,iref_raw`. If no card is
 present the firmware just logs a warning and keeps running. To verify the backup
 matches the network log, compare the SD CSV against `mqtt.csv`/`wifi.csv` for the
 same time.
@@ -231,7 +236,7 @@ same time.
 ## Status
 
 ### Implemented
-- ✅ ADC sampling of AMC1311 + HSTS016L (both differential) at 200 Hz via `esp_timer`
+- ✅ Voltage from the **PAC1951** over I2C (through the ISO1540 isolator) + current from the HSTS016L on ADC1, sampled at 200 Hz via `esp_timer`
 - ✅ Factory (eFuse) ADC calibration for accurate raw → millivolts
 - ✅ Two-point user calibration with NVS persistence
 - ✅ DS3231 real-time clock: boot sync + 10-minute drift correction

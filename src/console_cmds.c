@@ -114,25 +114,23 @@ static int cmd_sample(int argc, char **argv)
         printf("read failed\n");
         return 1;
     }
-    int v_diff = (int)p.voltage_raw - (int)p.aux_channels[0];
     int i_diff = (int)p.current_raw - (int)p.aux_channels[1];
     float v, i;
     adc_sampler_apply_cal(&p, &v, &i);
 
-    /* Raw ADC counts (0..4095) — good for spotting wiring problems.
-     * Each sensor shows its two legs and their difference. */
-    printf("Vraw: VOUTP=%u VOUTN=%u diff=%d\n",
-           p.voltage_raw, p.aux_channels[0], v_diff);
+    /* Raw counts — good for spotting wiring problems. Voltage is a single
+     * PAC1951 VBUS count read over I2C (0..65535); a stuck 0 means the PAC/
+     * isolator isn't talking. Current shows its two ADC legs and their diff. */
+    printf("Vraw: VBUS=%u  (PAC1951 over I2C)\n", p.voltage_raw);
     printf("Iraw: IOUT=%u IREF=%u diff=%d\n",
            p.current_raw, p.aux_channels[1], i_diff);
 
-    /* If factory calibration is available, also show millivolts. */
-    int mvvp, mvvn, mvip, mvir;
-    if (adc_sampler_raw_to_mv(p.voltage_raw, &mvvp) &&
-        adc_sampler_raw_to_mv(p.aux_channels[0], &mvvn) &&
-        adc_sampler_raw_to_mv(p.current_raw, &mvip) &&
+    /* If factory ADC calibration is available, show the current legs in mV
+     * (voltage is already digital, so no raw->mV step applies to it). */
+    int mvip, mvir;
+    if (adc_sampler_raw_to_mv(p.current_raw, &mvip) &&
         adc_sampler_raw_to_mv(p.aux_channels[1], &mvir)) {
-        printf("mV  : V diff=%d   I diff=%d\n", mvvp - mvvn, mvip - mvir);
+        printf("mV  : I diff=%d\n", mvip - mvir);
     }
     /* The final calibrated values in real units. */
     printf("calc: V=%.5f  I=%.5f\n", v, i);
