@@ -81,11 +81,26 @@ static void mqtt_event_handler(void *args, esp_event_base_t base,
          * the broker published from our Last Will on a previous drop. */
         esp_mqtt_client_publish(s_mqtt, s_mqtt_status_topic,
                                 MQTT_STATUS_ONLINE, 0, MQTT_QOS, /*retain=*/1);
+#if WIFI_TEST_ENABLE
+        /* Listen for the round-trip test messages (mosquitto_pub -t wifi/esp/in). */
+        esp_mqtt_client_subscribe(s_mqtt, WIFI_TEST_TOPIC_IN, MQTT_QOS);
+        ESP_LOGI(TAG, "wifi test: subscribed to %s", WIFI_TEST_TOPIC_IN);
+#endif
         break;
     case MQTT_EVENT_DISCONNECTED:
         s_mqtt_connected = false;
         ESP_LOGW(TAG, "MQTT broker disconnected");
         break;
+#if WIFI_TEST_ENABLE
+    case MQTT_EVENT_DATA: {
+        /* Something arrived on WIFI_TEST_TOPIC_IN. topic/data are NOT null-
+         * terminated, so print with explicit lengths. */
+        esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)data;
+        ESP_LOGI(TAG, "wifi test  PC -> ESP: %.*s = %.*s",
+                 event->topic_len, event->topic, event->data_len, event->data);
+        break;
+    }
+#endif
     default:
         break;
     }
@@ -281,6 +296,26 @@ static void sender_task(void *arg)
     }
 }
 
+#if TRANSPORT_USE_MQTT && WIFI_TEST_ENABLE
+/* Round-trip self-test: publish a counter to WIFI_TEST_TOPIC_OUT once a second
+ * while connected, so `mosquitto_sub -t wifi/esp/out -v` shows the link is live.
+ * The matching receive side is MQTT_EVENT_DATA in the handler above. */
+static void wifi_test_task(void *arg)
+{
+    (void)arg;
+    uint32_t n = 0;
+    char buf[24];
+    for (;;) {
+        if (s_mqtt && s_mqtt_connected) {
+            int len = snprintf(buf, sizeof(buf), "%lu", (unsigned long)n);
+            esp_mqtt_client_publish(s_mqtt, WIFI_TEST_TOPIC_OUT, buf, len, MQTT_QOS, 0);
+            n++;
+        }
+        vTaskDelay(pdMS_TO_TICKS(WIFI_TEST_PERIOD_MS));
+    }
+}
+#endif
+
 void wifi_transport_start(void)
 {
     s_queue = xQueueCreate(CONSUMER_QUEUE_LEN, sizeof(SamplePacket));
@@ -291,4 +326,7 @@ void wifi_transport_start(void)
     adc_sampler_subscribe(s_queue);
     /* Run on the network core (core 1), away from the sampler on core 0. */
     xTaskCreatePinnedToCore(sender_task, "wifi_tx", 4096, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
+#if TRANSPORT_USE_MQTT && WIFI_TEST_ENABLE
+    xTaskCreatePinnedToCore(wifi_test_task, "wifi_test", 3072, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
+#endif
 }

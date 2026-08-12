@@ -25,7 +25,7 @@
 /* ----------------------------------------------------------------------------
  * Sampling
  * ------------------------------------------------------------------------- */
-#define SAMPLE_RATE_HZ_DEFAULT   200           /* valid range 100..500 Hz      */
+#define SAMPLE_RATE_HZ_DEFAULT   500           /* valid range 100..500 Hz      */
 #define SAMPLE_RATE_HZ_MIN       100
 #define SAMPLE_RATE_HZ_MAX       500
 #define SAMPLE_QUEUE_LEN         1024          /* console plot queue (~5 s)    */
@@ -43,6 +43,11 @@
  * ------------------------------------------------------------------------- */
 #define ENABLE_WIFI              1             /* Wi-Fi + UDP/MQTT transport   */
 #define ENABLE_SD                0             /* SD card backup logging       */
+/* PAC1951 voltage-over-I2C. OFF = the sampler skips the PAC read entirely and
+ * reports VBUS = 0 — use this until the PAC1951/ISO1540 are wired, so a missing
+ * chip can't spam "I2C transaction timeout". Turn ON once the isolated I2C bus
+ * is in place and you want real voltage. */
+#define ENABLE_PAC1951           1             /* voltage via PAC1951 (I2C)    */
 
 /* ----------------------------------------------------------------------------
  * ADC  — ADC1 ONLY, and now CURRENT ONLY. ADC2 shares hardware with WiFi on the
@@ -60,8 +65,8 @@
  * on the 20 A model) sits within the 3.3 V ADC range, so it wires in directly.
  * ------------------------------------------------------------------------- */
 #define ADC_UNIT                 ADC_UNIT_1
-#define ADC_CURRENT_CHANNEL      ADC_CHANNEL_5 /* HSTS016L Vout (yellow) */
-#define ADC_CURRENT_REF_CHANNEL  ADC_CHANNEL_4 /* HSTS016L Vref (white)  */
+#define ADC_CURRENT_CHANNEL      ADC_CHANNEL_2 /* HSTS016L Vout (yellow) */
+#define ADC_CURRENT_REF_CHANNEL  ADC_CHANNEL_7 /* HSTS016L Vref (white)  */
 #define ADC_ATTEN                ADC_ATTEN_DB_12 /* full-scale ~0..3.1 V        */
 #define ADC_BITWIDTH             ADC_BITWIDTH_12 /* 0..4095                     */
 
@@ -81,11 +86,13 @@
 #define ADC_OVERSAMPLE_DEFAULT   8
 
 /* ----------------------------------------------------------------------------
- * I2C — DS3231 RTC + AT24C32 EEPROM module (shared bus, created in main).
+ * I2C — shared bus (created in main): DS3231 RTC + AT24C32 EEPROM + PAC1951.
+ * Pins GPIO4/GPIO5 verified working with the PAC on the bench (was 8/9; GPIO8
+ * is now free for the current-sensor ADC).
  * ------------------------------------------------------------------------- */
 #define I2C_PORT                 I2C_NUM_0
-#define I2C_SDA_GPIO             8             /* CONFIRM                       */
-#define I2C_SCL_GPIO             9             /* CONFIRM                       */
+#define I2C_SDA_GPIO             4             /* verified with PAC1951         */
+#define I2C_SCL_GPIO             5             /* verified with PAC1951         */
 #define I2C_FREQ_HZ              400000
 #define DS3231_ADDR              0x68
 #define AT24C32_ADDR             0x57
@@ -130,7 +137,7 @@
  * WiFi  (Phase B). Fill in your lab network credentials.
  * ------------------------------------------------------------------------- */
 #define WIFI_SSID                "eduroam"                 /* wifi name  */
-#define WIFI_PASS                "YOUR_WIFI_PASSWORD"          /* wifi password  */
+#define WIFI_PASS                "YOUR_WIFI_PASSWORD"       /* wifi password  */
 
 /* WPA2-Enterprise (campus networks: eduroam / MWireless). Set to 1 and fill in
  * your UMich credentials to use 802.1X login instead of a simple password.
@@ -142,7 +149,7 @@
 /* MWireless: use your uniqname (no @umich.edu). eduroam: use uniqname@umich.edu. */
 #define EAP_IDENTITY             "uniqname@umich.edu"    /* umich email */
 #define EAP_USERNAME             "uniqname@umich.edu"    /* umich email */
-#define EAP_PASSWORD             "YOUR_UMICH_PASSWORD"          /* umich password */
+#define EAP_PASSWORD             "YOUR_UMICH_PASSWORD"      /* umich password */
 
 /* Reconnect backoff: wait grows 1s -> 2s -> ... capped at 30s between tries.  */
 #define WIFI_RECONNECT_MIN_MS    1000
@@ -174,6 +181,17 @@
 #define MQTT_STATUS_TOPIC_FMT    "clouds/%08lX/status"      /* device_id        */
 #define MQTT_STATUS_ONLINE       "online"
 #define MQTT_STATUS_OFFLINE      "offline"
+
+/* WiFi/MQTT round-trip self-test. When on, the firmware publishes a heartbeat
+ * counter to WIFI_TEST_TOPIC_OUT once a second and prints anything it receives
+ * on WIFI_TEST_TOPIC_IN — a quick way to prove the link both directions:
+ *     mosquitto_sub -t wifi/esp/out -v      # watch the ESP's counter
+ *     mosquitto_pub -t wifi/esp/in  -m 42   # send 42 to the ESP (prints on console)
+ * Set to 0 for production (no extra traffic). */
+#define WIFI_TEST_ENABLE         1
+#define WIFI_TEST_TOPIC_OUT      "wifi/esp/out"             /* ESP -> PC counter */
+#define WIFI_TEST_TOPIC_IN       "wifi/esp/in"              /* PC -> ESP messages */
+#define WIFI_TEST_PERIOD_MS      1000                        /* heartbeat cadence */
 
 /* ----------------------------------------------------------------------------
  * Task placement (FreeRTOS).  Core 0 = real-time sampling, Core 1 = I/O.

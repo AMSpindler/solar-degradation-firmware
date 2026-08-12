@@ -40,6 +40,10 @@
  * can tell which part of the code a message came from. */
 static const char *TAG = "main";
 
+/* The shared I2C bus handle, exposed so the console's `i2cscan` command can
+ * probe it. Set once in app_main after the bus is created. */
+i2c_master_bus_handle_t g_i2c_bus = NULL;
+
 /*
  * Create the I2C bus that the DS3231 clock lives on.
  *
@@ -92,6 +96,7 @@ void app_main(void)
      *    wired up yet, we keep going (can set the time later with the
      *    `settime` command). */
     i2c_master_bus_handle_t i2c_bus = init_i2c_bus();
+    g_i2c_bus = i2c_bus;                     /* share it with the console scan */
     if (rtc_clock_init(i2c_bus) == ESP_OK) {
         if (rtc_clock_sync_system_time() != ESP_OK) {
             ESP_LOGW(TAG, "DS3231 unreadable; system time not set (use `settime`)");
@@ -102,11 +107,14 @@ void app_main(void)
     }
 
     /* 3b. Register the PAC1951 voltage monitor on the SAME I2C bus (through the
-     *     ISO1540 isolator). If it isn't wired up yet, keep going — voltage
-     *     reads will just come back 0 until it's connected. */
+     *     ISO1540 isolator). Skipped entirely unless ENABLE_PAC1951 is on, so a
+     *     missing PAC never touches I2C. If enabled but not wired yet, keep
+     *     going — voltage just reads 0 until it's connected. */
+#if ENABLE_PAC1951
     if (pac1951_init(i2c_bus) != ESP_OK) {
         ESP_LOGW(TAG, "PAC1951 init failed; voltage will read 0 until wired");
     }
+#endif
 
     /* 4. Set up the ADC sampler. This creates the "queue" (a conveyor belt
      *    that carries readings from the sampler to whoever wants them) and

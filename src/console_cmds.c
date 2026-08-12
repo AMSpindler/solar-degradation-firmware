@@ -38,6 +38,10 @@
 #include "esp_log.h"
 #include "esp_console.h"            /* the REPL / command registration        */
 #include "esp_heap_caps.h"         /* esp_get_free_heap_size (memory check)   */
+#include "driver/i2c_master.h"     /* i2c_master_probe for the `i2cscan` cmd  */
+
+/* The shared I2C bus handle lives in main.c; `i2cscan` probes it. */
+extern i2c_master_bus_handle_t g_i2c_bus;
 
 static const char *TAG = "console";
 
@@ -120,7 +124,8 @@ static int cmd_sample(int argc, char **argv)
 
     /* Raw counts — good for spotting wiring problems. Voltage is a single
      * PAC1951 VBUS count read over I2C (0..65535); a stuck 0 means the PAC/
-     * isolator isn't talking. Current shows its two ADC legs and their diff. */
+     * isolator isn't talking. Current shows its two ADC legs and their diff.
+     * The converted values are on the `calc:` line below. */
     printf("Vraw: VBUS=%u  (PAC1951 over I2C)\n", p.voltage_raw);
     printf("Iraw: IOUT=%u IREF=%u diff=%d\n",
            p.current_raw, p.aux_channels[1], i_diff);
@@ -132,8 +137,9 @@ static int cmd_sample(int argc, char **argv)
         adc_sampler_raw_to_mv(p.aux_channels[1], &mvir)) {
         printf("mV  : I diff=%d\n", mvip - mvir);
     }
-    /* The final calibrated values in real units. */
-    printf("calc: V=%.5f  I=%.5f\n", v, i);
+    /* Converted values. Before `cal v`, V is volts at the PAC pin (raw*32/65536);
+     * after `cal v` it's real bus volts (divider absorbed). Same idea for I. */
+    printf("calc: V=%.5f V  I=%.5f A\n", v, i);
     return 0;
 }
 
@@ -422,6 +428,39 @@ static int cmd_status(int argc, char **argv)
 /* registration / starting the prompt                                         */
 /* ------------------------------------------------------------------------- */
 
+/* Probe every 7-bit address on the shared I2C bus and report which chips ACK.
+ * The definitive bring-up check for the PAC1951 / DS3231 (and their addresses). */
+static int cmd_i2cscan(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (g_i2c_bus == NULL) {
+        printf("I2C bus not initialized\n");
+        return 1;
+    }
+    printf("scanning I2C bus 0x08..0x77 ...\n");
+    /* Silence the driver's per-NACK error logs so the output stays clean. */
+    esp_log_level_set("i2c.master", ESP_LOG_NONE);
+    int found = 0;
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        if (i2c_master_probe(g_i2c_bus, addr, 50) == ESP_OK) {   /* 50 ms/addr */
+            const char *who = "";
+            if      (addr == PAC1951_ADDR) who = "   <- PAC1951 (voltage)";
+            else if (addr == DS3231_ADDR)  who = "   <- DS3231 RTC";
+            else if (addr == AT24C32_ADDR) who = "   <- AT24C32 EEPROM";
+            printf("  found 0x%02X%s\n", addr, who);
+            found++;
+        }
+    }
+    esp_log_level_set("i2c.master", ESP_LOG_INFO);               /* restore */
+    if (found == 0) {
+        printf("  no devices found — check power (PWRDN high for the PAC),\n");
+        printf("  4.7k pull-ups on SDA/SCL, addressing, and SDA/SCL not swapped.\n");
+    } else {
+        printf("done: %d device(s).\n", found);
+    }
+    return 0;
+}
+
 /* Small helper so registering each command is one tidy line below. */
 static void register_cmd(const char *name, const char *help, esp_console_cmd_func_t fn)
 {
@@ -452,6 +491,7 @@ void console_start(void)
     register_cmd("turns",  "turns <n> : wire passes through the current sensor hole", cmd_turns);
     register_cmd("avg",    "avg <n> : reads averaged per sample (1=off, cuts noise)", cmd_avg);
     register_cmd("settime","settime Y M D h m s : set DS3231 + system clock (UTC)", cmd_settime);
+    register_cmd("i2cscan","i2cscan : probe the I2C bus and list device addresses", cmd_i2cscan);
     register_cmd("status", "status : sampler/queue/RTC/heap/calibration", cmd_status);
 
     /* Friendly banner so the commands are visible without knowing to type `help`. */

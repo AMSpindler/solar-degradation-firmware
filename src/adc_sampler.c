@@ -103,11 +103,18 @@ static void build_packet(SamplePacket *p)
      * "something's wrong" flatline, same as a stuck ADC). aux[0] is unused now
      * (the old VOUTN leg is gone) — keep it 0 so the differential in apply_cal
      * reduces to just the VBUS value. */
+#if ENABLE_PAC1951
     uint16_t vbus = 0;
     (void)pac1951_read_vbus_raw(&vbus);
     p->voltage_raw     = vbus;
     p->aux_channels[0] = 0;
     (void)pac1951_refresh_v();  /* prime the next read */
+#else
+    /* PAC not wired yet — report 0 volts and never touch the I2C bus, so a
+     * missing chip can't stall the sampler with I2C timeouts. */
+    p->voltage_raw     = 0;
+    p->aux_channels[0] = 0;
+#endif
 
     /* CURRENT still on the ESP32 ADC (unchanged). */
     p->current_raw     = read_raw(ADC_CURRENT_CHANNEL);     /* HSTS016L Vout */
@@ -338,6 +345,7 @@ esp_err_t adc_sampler_average_voltage_raw(int n, float *out_diff)
     if (out_diff == NULL || n <= 0) {
         return ESP_ERR_INVALID_ARG;
     }
+#if ENABLE_PAC1951
     double acc = 0.0;  /* running total; double = high-precision decimal */
     int got = 0;
     for (int i = 0; i < n; i++) {
@@ -349,6 +357,11 @@ esp_err_t adc_sampler_average_voltage_raw(int n, float *out_diff)
     }
     *out_diff = got ? (float)(acc / got) : 0.0f;  /* total / count = average */
     return got ? ESP_OK : ESP_FAIL;
+#else
+    /* PAC disabled — no voltage source to calibrate. */
+    *out_diff = 0.0f;
+    return ESP_OK;
+#endif
 }
 
 /* Same idea for the current sensor. Returns the averaged DIFFERENCE
@@ -422,23 +435,29 @@ static float chan_mv(uint16_t raw)
 
 /*
  * Turn a raw packet into real engineering units (volts and amps).
- * Voltage: two-point calibration line (slope/offset).
- * Current: if NOT two-point calibrated (slope=1, offset=0), use the datasheet
- * physics — amps = (Vout - Vref in mV) / sensitivity / turns — so it reads real
- * amps out of the box. Once `cal i` runs, the two-point line takes over (more
- * accurate, with the turn count baked into the slope).
+ * Both channels: if NOT two-point calibrated (slope=1, offset=0), use datasheet
+ * physics so they read real units out of the box; once `cal v`/`cal i` runs, the
+ * two-point line takes over.
+ *   Voltage: physics = VBUS count / full-scale * FSR = volts at the PAC's SENSE1+
+ *            pin (i.e. AFTER the external divider). `cal v` maps raw -> real bus
+ *            volts and absorbs the divider ratio.
+ *   Current: physics = (Vout - Vref, mV) / sensitivity / turns. `cal i` bakes the
+ *            turn count into the slope.
  */
 void adc_sampler_apply_cal(const SamplePacket *p, float *v_calc, float *i_calc)
 {
-    /* Voltage is now a single PAC1951 count (aux[0] is 0, so this v_diff is just
-     * voltage_raw). Current is still a differential: Vout - Vref. The two-point
-     * `cal v` slope maps the raw VBUS count -> real volts and absorbs the
-     * external 600 V->32 V hardware divider. */
+    /* Voltage is a single PAC1951 count (aux[0] is 0, so v_diff is just
+     * voltage_raw). Current is a differential: Vout - Vref. */
     int v_diff = (int)p->voltage_raw - (int)p->aux_channels[0];
     int i_diff = (int)p->current_raw - (int)p->aux_channels[1];
     if (v_calc) {
-        *v_calc = s_cal[CAL_CH_VOLTAGE].slope * (float)v_diff
-                  + s_cal[CAL_CH_VOLTAGE].offset;
+        cal_coeff_t cv = s_cal[CAL_CH_VOLTAGE];
+        if (cv.slope == 1.0f && cv.offset == 0.0f) {
+            /* Physics: convert the raw VBUS count to volts at the pin. */
+            *v_calc = (float)p->voltage_raw / PAC1951_VBUS_FULL_SCALE * PAC1951_VBUS_FSR_V;
+        } else {
+            *v_calc = cv.slope * (float)v_diff + cv.offset;
+        }
     }
     if (i_calc) {
         cal_coeff_t c = s_cal[CAL_CH_CURRENT];
