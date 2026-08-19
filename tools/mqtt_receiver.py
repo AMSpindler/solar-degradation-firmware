@@ -153,6 +153,10 @@ def main():
     ap.add_argument("--overwrite", action="store_true",
                     help="start a FRESH CSV (truncate) instead of appending — one "
                          "file per run. Default appends (so crash-recovery fills gaps)")
+    ap.add_argument("--fresh", action="store_true",
+                    help="CLEAN session: do NOT replay messages the broker queued "
+                         "while offline (disables crash-recovery). Use for clean "
+                         "per-run captures — no carryover from a previous run.")
     args = ap.parse_args()
 
     state["turns"] = max(1, args.turns)
@@ -175,16 +179,22 @@ def main():
                            "i_diff,v_volts,i_amps\n")
 
     userdata = {"topic": args.topic}
-    # Persistent session: a FIXED client_id + clean_session=False tells the broker
-    # to remember us and queue QoS-1 messages while we're disconnected, then
-    # redeliver them when we reconnect. paho-mqtt 2.x needs the callback API
-    # version; fall back for 1.x.
+    # Session type:
+    #   default (persistent): FIXED client_id + clean_session=False tells the broker
+    #     to remember us and queue QoS-1 messages while we're disconnected, then
+    #     redeliver them on reconnect (crash-recovery — but also replays a previous
+    #     run's tail).
+    #   --fresh (clean): clean_session=True — the broker keeps no session for us, so
+    #     nothing is queued while offline AND any existing backlog is wiped. No
+    #     carryover; ideal for clean per-run test captures.
+    # paho-mqtt 2.x needs the callback API version; fall back for 1.x.
+    clean = args.fresh
     try:
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
-                             client_id=args.client_id, clean_session=False,
+                             client_id=args.client_id, clean_session=clean,
                              userdata=userdata)
     except (AttributeError, TypeError):
-        client = mqtt.Client(client_id=args.client_id, clean_session=False,
+        client = mqtt.Client(client_id=args.client_id, clean_session=clean,
                              userdata=userdata)
     client.on_connect = on_connect
     client.on_message = on_message

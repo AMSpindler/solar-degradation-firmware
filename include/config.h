@@ -25,7 +25,7 @@
 /* ----------------------------------------------------------------------------
  * Sampling
  * ------------------------------------------------------------------------- */
-#define SAMPLE_RATE_HZ_DEFAULT   500           /* valid range 100..500 Hz      */
+#define SAMPLE_RATE_HZ_DEFAULT   200           /* valid range 100..500 Hz      */
 #define SAMPLE_RATE_HZ_MIN       100
 #define SAMPLE_RATE_HZ_MAX       500
 #define SAMPLE_QUEUE_LEN         1024          /* console plot queue (~5 s)    */
@@ -41,7 +41,7 @@
  * Subsystem enable — turn OFF for clean USB-only bench testing (no Wi-Fi/SD
  * error spam in the console). Set back to 1 to use the network / SD path.
  * ------------------------------------------------------------------------- */
-#define ENABLE_WIFI              1             /* Wi-Fi + UDP/MQTT transport   */
+#define ENABLE_WIFI              0             /* Wi-Fi + UDP/MQTT transport   */
 #define ENABLE_SD                0             /* SD card backup logging       */
 /* PAC1951 voltage-over-I2C. OFF = the sampler skips the PAC read entirely and
  * reports VBUS = 0 — use this until the PAC1951/ISO1540 are wired, so a missing
@@ -83,7 +83,7 @@
  * x 8 reads fits the 5 ms window); higher starves the CPU and trips the task
  * watchdog. For MORE averaging, lower SAMPLE_RATE_HZ_DEFAULT (bench sweeps don't
  * need 200 Hz). Change live with the `avg` command. */
-#define ADC_OVERSAMPLE_DEFAULT   8
+#define ADC_OVERSAMPLE_DEFAULT   4
 
 /* ----------------------------------------------------------------------------
  * I2C — shared bus (created in main): DS3231 RTC + AT24C32 EEPROM + PAC1951.
