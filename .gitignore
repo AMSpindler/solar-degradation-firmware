@@ -4,13 +4,11 @@
 .vscode/launch.json
 .vscode/ipch
 
-# Auto-generated per-environment sdkconfig; keep sdkconfig.defaults tracked.
-sdkconfig.*
-!sdkconfig.defaults
-
 # Python
 __pycache__/
 *.pyc
 
-# Runtime CSV output from the logger (sample captures can be committed by name)
-sen0644_log.csv
+# Runtime CSV output from the host logger
+lux_esp32_*.csv
+
+.DS_Store
