@@ -50,17 +50,41 @@ Pins are `#define`d at the top of [`src/main.cpp`](src/main.cpp) (`S1_RX`,
 
 ---
 
-## Build & run
+## Quick start
+
+Everything needed to build is in this repo — clone it and go. You need two
+things installed first:
+
+- **PlatformIO** — either the
+  [VS Code extension](https://platformio.org/install/ide?install=vscode)
+  (open this folder and it will offer to install it), or the CLI:
+  `pip install platformio`
+- **Python 3 with pyserial**, for the host logger: `pip install pyserial`
+
+The ESP32 toolchain itself is downloaded automatically the first time you
+build — you do not install it by hand.
 
 ```bash
-pio run                       # build
-pio run -t upload             # flash
-python3 sen0644_host_logger.py  # capture the CSV stream (see below)
+git clone https://github.com/AMSpindler/solar-degradation-firmware.git
+cd solar-degradation-firmware
+git checkout sen0644
+
+pio run                          # build (first run downloads the toolchain)
+pio run -t upload                # flash the ESP32-S3
+python3 sen0644_host_logger.py   # capture the CSV stream
 ```
 
-To watch the raw stream instead of logging it, `pio device monitor` works too —
-[`platformio.ini`](platformio.ini) already sets `monitor_dtr = 1`, which the
-firmware needs to consider the host connected.
+In VS Code, the PlatformIO toolbar buttons do the same thing: **Build** (✓) and
+**Upload** (→).
+
+Wire the sensors first — see [Wiring](#wiring) above — and watch the `#` status
+lines on first boot, since a sensor found at a non-default baud will ask you to
+power-cycle it.
+
+To watch the raw stream instead of logging it to a file, `pio device monitor`
+works too — [`platformio.ini`](platformio.ini) already sets `monitor_dtr = 1`,
+which the firmware needs to consider the host connected. Close the monitor
+before running the host logger; only one program can hold the port.
 
 > **Which USB port?** The build sets `ARDUINO_USB_CDC_ON_BOOT=1` and
 > `ARDUINO_USB_MODE=1`, so `Serial` is the native USB CDC on the **"USB & OTG"**
@@ -186,11 +210,22 @@ tool against a sensor while the ESP32 is polling it.
 
 ## Files
 
+That is the complete repo — six files, nothing else is required to build:
+
 | File | What it does |
 |------|--------------|
 | [`src/main.cpp`](src/main.cpp) | The whole firmware: CRC-16, Modbus framing, per-sensor baud detection and init, the polling loop, and recovery. Tunables are `#define`s at the top. |
 | [`sen0644_host_logger.py`](sen0644_host_logger.py) | Host-side capture: reads the CSV stream and writes it to a timestamped file with wall-clock time. |
 | [`platformio.ini`](platformio.ini) | Board `esp32-s3-devkitc-1`, framework `arduino`, native USB CDC flags, monitor DTR/RTS settings. |
+| [`.vscode/extensions.json`](.vscode/extensions.json) | Tells VS Code to recommend the PlatformIO extension and skip the C/C++ pack that conflicts with it. Not needed to build. |
+| `.gitignore` | Keeps build output (`.pio/`), `__pycache__/`, and captured `lux_esp32_*.csv` logs out of the repo. |
+| `README.md` | This file. |
+
+The build generates a `.pio/` directory on first run; it is ignored and can be
+deleted at any time. There are no `include/`, `lib/`, or `test/` directories —
+the firmware is a single translation unit that pulls in only `<Arduino.h>`, so
+PlatformIO's empty scaffold folders were removed. Recreate them if you later
+add a private library or unit tests.
 
 ### Modbus registers used
 
