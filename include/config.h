@@ -50,6 +50,24 @@
 #define ENABLE_PAC1951           1             /* voltage via PAC1951 (I2C)    */
 
 /* ----------------------------------------------------------------------------
+ * Scheduled sleep — RTC-based day-only operation to save battery. Outside the
+ * daily ON window the ESP deep-sleeps (core ~10 uA). It wakes every
+ * SLEEP_WAKE_CHUNK_S and re-reads the DS3231, so the wake stays tied to the
+ * accurate RTC despite the ESP's internal-timer drift.
+ *   TIMES ARE IN THE DS3231's TIMEZONE — set the RTC to LOCAL time (`settime`),
+ *   or offset these hours. Deep sleep powers down the ESP only; the sensors stay
+ *   powered unless a load switch is added. Set ENABLE 0 for bench work (else the
+ *   board sleeps whenever the clock is outside the window). Default 7:30-19:30.
+ * ------------------------------------------------------------------------- */
+#define SLEEP_SCHEDULE_ENABLE    0
+#define SLEEP_ON_HOUR            21     /* start running at 07:30 local (11 UTC)          */
+#define SLEEP_ON_MIN             5
+#define SLEEP_OFF_HOUR           21     /* sleep at 19:30 local (23 UTC)         */
+#define SLEEP_OFF_MIN            30
+#define SLEEP_WAKE_CHUNK_S       3600   /* re-check the real clock at least hourly*/
+#define SLEEP_CHECK_PERIOD_S     10     /* how often (s) to check for OFF while awake */
+
+/* ----------------------------------------------------------------------------
  * ADC  — ADC1 ONLY, and now CURRENT ONLY. ADC2 shares hardware with WiFi on the
  *        ESP32-S3 and its reads fail while WiFi is active, so all sampling stays
  *        on ADC1. ESP32-S3 ADC1 = GPIO1..GPIO10 (ADC1_CH0..CH9).

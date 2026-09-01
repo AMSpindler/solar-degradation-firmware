@@ -29,6 +29,7 @@
 #include "console_cmds.h"    /* the text commands you type over USB         */
 #include "wifi_transport.h"  /* Phase B: send sample batches over Wi-Fi      */
 #include "sd_logger.h"       /* Phase B: backup logging to the SD card       */
+#include "power_schedule.h"  /* RTC-based day-only sleep (deep sleep at night)*/
 
 #include "esp_log.h"         /* ESP_LOGI(...) prints labeled debug messages  */
 #include "esp_event.h"       /* "event loop" plumbing (needed by Wi-Fi later)*/
@@ -106,6 +107,12 @@ void app_main(void)
         ESP_LOGW(TAG, "DS3231 init failed; continuing without RTC");
     }
 
+    /* 3a. Scheduled-sleep gate: if the RTC says we're outside the daily ON
+     *     window, deep-sleep toward the next ON time NOW — before bringing up
+     *     the PAC, sampler, and Wi-Fi — so a night wake costs almost nothing.
+     *     Returns only if we're in the ON window (or the RTC isn't set). */
+    power_schedule_boot_gate();
+
     /* 3b. Register the PAC1951 voltage monitor on the SAME I2C bus (through the
      *     ISO1540 isolator). Skipped entirely unless ENABLE_PAC1951 is on, so a
      *     missing PAC never touches I2C. If enabled but not wired yet, keep
@@ -141,6 +148,10 @@ void app_main(void)
     /* 7. Now actually start sampling. From here a timer fires 200x/second on
      *    CPU core 0 and fans readings out to all subscribers. */
     ESP_ERROR_CHECK(adc_sampler_start());
+
+    /* 8. Watch the clock while running; deep-sleep when the daily OFF time
+     *    arrives (see power_schedule.c). No-op unless SLEEP_SCHEDULE_ENABLE. */
+    power_schedule_start_monitor();
 
     /* app_main() returns here, but the timer + console tasks keep running. */
     ESP_LOGI(TAG, "boot complete; type `help` at the prompt");
