@@ -25,8 +25,8 @@
 /* ----------------------------------------------------------------------------
  * Sampling
  * ------------------------------------------------------------------------- */
-#define SAMPLE_RATE_HZ_DEFAULT   200           /* valid range 100..500 Hz      */
-#define SAMPLE_RATE_HZ_MIN       100
+#define SAMPLE_RATE_HZ_DEFAULT   500           /* valid range 100..500 Hz      */
+#define SAMPLE_RATE_HZ_MIN       1
 #define SAMPLE_RATE_HZ_MAX       500
 #define SAMPLE_QUEUE_LEN         1024          /* console plot queue (~5 s)    */
 #define BATCH_SAMPLES            100           /* samples per UDP/MQTT/SD batch */
@@ -41,7 +41,7 @@
  * Subsystem enable — turn OFF for clean USB-only bench testing (no Wi-Fi/SD
  * error spam in the console). Set back to 1 to use the network / SD path.
  * ------------------------------------------------------------------------- */
-#define ENABLE_WIFI              0             /* Wi-Fi + UDP/MQTT transport   */
+#define ENABLE_WIFI              1             /* Wi-Fi + UDP/MQTT transport   */
 #define ENABLE_SD                0             /* SD card backup logging       */
 /* PAC1951 voltage-over-I2C. OFF = the sampler skips the PAC read entirely and
  * reports VBUS = 0 — use this until the PAC1951/ISO1540 are wired, so a missing
@@ -118,6 +118,11 @@
 #define PAC1951_REG_REFRESH_V    0x1F          /* Send Byte: refresh, keep acc  */
 #define PAC1951_VBUS_FSR_V       32.0f         /* default VBUS full-scale range  */
 #define PAC1951_VBUS_FULL_SCALE  65536.0f      /* 16-bit unipolar counts         */
+/* Stream the PAC's 8-sample rolling average (VBUS_AVG, 0x0F) instead of the
+ * instantaneous VBUS (0x07). 1 = ~sqrt(8) (~2.8x) less voltage noise, but ~8 ms
+ * response so high-rate samples overlap; 0 = raw instantaneous. Affects only the
+ * streamed sample — calibration already uses the averaged register. */
+#define PAC1951_STREAM_AVG       0
 
 /* ----------------------------------------------------------------------------
  * SD card over SPI  (Phase B backup logging).
@@ -160,15 +165,22 @@
  * UDP works with no broker, MQTT needs Mosquitto running on the lab PC AND the
  * esp-mqtt library vendored into components/ (see README).
  * ------------------------------------------------------------------------- */
-#define TRANSPORT_USE_UDP        1
+/* BATTERY TEST: MQTT (port 1883) is blocked by the campus firewall and UDP
+ * needs the laptop on, so both are OFF here; the ESP reports over HTTP to
+ * ThingSpeak instead (see the THINGSPEAK block below). Set both back to 1 for
+ * normal broker/UDP operation. */
+#define TRANSPORT_USE_UDP        0
 #define TRANSPORT_USE_MQTT       1             /* esp-mqtt vendored in components/mqtt */
 
 /* --- UDP: the ESP32 sends sample batches straight to this PC + port. --- */
-#define UDP_DEST_IP              "35.3.223.124"  /* FILL: your lab PC's IP      */
+#define UDP_DEST_IP              "x"  /* FILL: your lab PC's IP      */
 #define UDP_DEST_PORT            9000
 
 /* --- MQTT: publish to a Mosquitto broker. Topic includes the device id. --- */
-#define MQTT_BROKER_URI          "mqtt://35.3.223.124:1883" /* FILL            */
+/* BATTERY TEST: a free always-on PUBLIC broker so no PC/Pi of ours has to stay
+ * running. Reached outbound, so eduroam client-isolation doesn't block it.
+ * Comment this and uncomment the normal broker below to switch back. */
+#define MQTT_BROKER_URI          "mqtt://35.3.248.216:1883"
 #define MQTT_TOPIC_FMT           "clouds/%08lX/samples"     /* device_id        */
 #define MQTT_QOS                 1
 
@@ -183,15 +195,32 @@
 #define MQTT_STATUS_OFFLINE      "offline"
 
 /* WiFi/MQTT round-trip self-test. When on, the firmware publishes a heartbeat
- * counter to WIFI_TEST_TOPIC_OUT once a second and prints anything it receives
- * on WIFI_TEST_TOPIC_IN — a quick way to prove the link both directions:
- *     mosquitto_sub -t wifi/esp/out -v      # watch the ESP's counter
- *     mosquitto_pub -t wifi/esp/in  -m 42   # send 42 to the ESP (prints on console)
+ * counter to WIFI_TEST_TOPIC_OUT once a second — RETAINED, so the broker keeps
+ * the LAST value. For the overnight battery test, read the last counter the ESP
+ * sent before it died (no logger of ours needs to run):
+ *     mosquitto_sub -h test.mosquitto.org -t clouds/solarbatt-9f3a/counter -v -C 1
+ *     mosquitto_pub -h test.mosquitto.org -t clouds/solarbatt-9f3a/in  -m 42
+ * Topics are unique so they don't collide on the shared public broker.
  * Set to 0 for production (no extra traffic). */
 #define WIFI_TEST_ENABLE         1
-#define WIFI_TEST_TOPIC_OUT      "wifi/esp/out"             /* ESP -> PC counter */
-#define WIFI_TEST_TOPIC_IN       "wifi/esp/in"              /* PC -> ESP messages */
+#define WIFI_TEST_TOPIC_OUT      "clouds/solarbatt-9f3a/counter" /* ESP -> counter */
+#define WIFI_TEST_TOPIC_IN       "clouds/solarbatt-9f3a/in"      /* PC -> ESP msgs */
 #define WIFI_TEST_PERIOD_MS      1000                        /* heartbeat cadence */
+
+/* ----------------------------------------------------------------------------
+ * ThingSpeak HTTP heartbeat (battery test). MQTT 1883 is firewall-blocked on
+ * campus, but HTTP (port 80) is not — so the ESP GETs a counter to ThingSpeak,
+ * which timestamps and charts it. Watch the chart from anywhere; when it stops
+ * updating, that timestamp is when the battery died.
+ *   1. Make a free channel at thingspeak.com, enable Field 1.
+ *   2. Paste its Write API Key below.
+ * Free tier requires >= 15 s between updates. Set THINGSPEAK_ENABLE 0 for
+ * normal (non-HTTP) operation.
+ * ------------------------------------------------------------------------- */
+#define THINGSPEAK_ENABLE        0
+#define THINGSPEAK_HOST          "api.thingspeak.com"
+#define THINGSPEAK_API_KEY       "YOUR_WRITE_KEY"    /* channel Write API Key   */
+#define THINGSPEAK_PERIOD_MS     20000               /* >= 15000 on the free tier */
 
 /* ----------------------------------------------------------------------------
  * Task placement (FreeRTOS).  Core 0 = real-time sampling, Core 1 = I/O.

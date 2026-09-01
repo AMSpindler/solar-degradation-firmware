@@ -37,6 +37,10 @@
 #include "mqtt_client.h"
 #endif
 
+#if THINGSPEAK_ENABLE
+#include "esp_http_client.h"   /* battery-test heartbeat over HTTP (port 80) */
+#endif
+
 static const char *TAG = "wifi_tx";
 
 /* Wi-Fi connection state. "volatile" because it's changed in event callbacks
@@ -308,10 +312,48 @@ static void wifi_test_task(void *arg)
     for (;;) {
         if (s_mqtt && s_mqtt_connected) {
             int len = snprintf(buf, sizeof(buf), "%lu", (unsigned long)n);
-            esp_mqtt_client_publish(s_mqtt, WIFI_TEST_TOPIC_OUT, buf, len, MQTT_QOS, 0);
+            /* retain=1: broker keeps the last counter, so if the battery dies
+             * overnight the final value is still there to read back. */
+            esp_mqtt_client_publish(s_mqtt, WIFI_TEST_TOPIC_OUT, buf, len, MQTT_QOS, 1);
             n++;
         }
         vTaskDelay(pdMS_TO_TICKS(WIFI_TEST_PERIOD_MS));
+    }
+}
+#endif
+
+#if THINGSPEAK_ENABLE
+/* Battery-test heartbeat: GET an incrementing counter to ThingSpeak every
+ * THINGSPEAK_PERIOD_MS. ThingSpeak timestamps and charts each point; when the
+ * battery dies the last point marks the time. Uses plain HTTP (port 80), which
+ * the campus firewall allows — unlike MQTT's port 1883. */
+static void thingspeak_task(void *arg)
+{
+    (void)arg;
+    uint32_t n = 0;
+    char url[256];
+    for (;;) {
+        if (s_wifi_connected) {
+            snprintf(url, sizeof(url),
+                     "http://%s/update?api_key=%s&field1=%lu",
+                     THINGSPEAK_HOST, THINGSPEAK_API_KEY, (unsigned long)n);
+            esp_http_client_config_t cfg = {
+                .url        = url,
+                .method     = HTTP_METHOD_GET,
+                .timeout_ms = 8000,
+            };
+            esp_http_client_handle_t c = esp_http_client_init(&cfg);
+            esp_err_t err = esp_http_client_perform(c);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "thingspeak field1=%lu -> HTTP %d",
+                         (unsigned long)n, esp_http_client_get_status_code(c));
+                n++;
+            } else {
+                ESP_LOGW(TAG, "thingspeak GET failed: %s", esp_err_to_name(err));
+            }
+            esp_http_client_cleanup(c);
+        }
+        vTaskDelay(pdMS_TO_TICKS(THINGSPEAK_PERIOD_MS));
     }
 }
 #endif
@@ -328,5 +370,8 @@ void wifi_transport_start(void)
     xTaskCreatePinnedToCore(sender_task, "wifi_tx", 4096, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
 #if TRANSPORT_USE_MQTT && WIFI_TEST_ENABLE
     xTaskCreatePinnedToCore(wifi_test_task, "wifi_test", 3072, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
+#endif
+#if THINGSPEAK_ENABLE
+    xTaskCreatePinnedToCore(thingspeak_task, "thingspeak", 8192, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
 #endif
 }

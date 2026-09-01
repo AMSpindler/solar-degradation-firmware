@@ -20,3 +20,6 @@ __pycache__/
 # Build-generated component manager lock file + editor workspace.
 dependencies.lock
 *.code-workspace
+
+# CSV data captures — kept out of the repo (partitions.csv at root is NOT data)
+csv/**/*.csv

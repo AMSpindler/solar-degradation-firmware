@@ -105,7 +105,11 @@ static void build_packet(SamplePacket *p)
      * reduces to just the VBUS value. */
 #if ENABLE_PAC1951
     uint16_t vbus = 0;
-    (void)pac1951_read_vbus_raw(&vbus);
+#if PAC1951_STREAM_AVG
+    (void)pac1951_read_vbus_avg_raw(&vbus);   /* 8-sample rolling average (quieter) */
+#else
+    (void)pac1951_read_vbus_raw(&vbus);       /* instantaneous VBUS */
+#endif
     p->voltage_raw     = vbus;
     p->aux_channels[0] = 0;
     (void)pac1951_refresh_v();  /* prime the next read */
