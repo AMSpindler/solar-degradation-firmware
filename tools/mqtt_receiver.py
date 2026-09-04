@@ -35,6 +35,7 @@ Packet layout (must match include/sample_packet.h, little-endian):
   Current is still differential: current = iout - iref.
 """
 import argparse
+import json
 import os
 import struct
 import sys
@@ -53,7 +54,7 @@ SAMPLE_SIZE = struct.calcsize(SAMPLE_FMT)   # 16
 PAC_VBUS_FULL_SCALE = 65536.0  # PAC1951 VBUS is a 16-bit unipolar count
 
 # Shared state (kept in a dict so the MQTT callbacks can update it).
-state = {"csv": None, "total": 0, "last_seq": None,
+state = {"csv": None, "lux_csv": None, "total": 0, "last_seq": None,
          # conversion params (overridden from CLI args in main())
          "turns": 1, "i_sens": 31.25, "i_zero": 0.0,
          "mv_per_count": 3300.0 / 4095.0,
@@ -83,7 +84,29 @@ def on_connect(client, userdata, flags, rc, properties=None):
     client.subscribe(userdata["topic"], qos=1)
 
 
+def on_lux(client, userdata, msg):
+    """Decode a JSON lux message (clouds/<id>/lux) and optionally log it to CSV."""
+    try:
+        d = json.loads(msg.payload)
+    except (ValueError, UnicodeDecodeError):
+        return
+    dev = msg.topic.split("/")[1] if "/" in msg.topic else "?"
+    row = (dev, d.get("t_us"), d.get("lux1"), d.get("lux2"),
+           d.get("online1"), d.get("online2"))
+    if state["lux_csv"]:
+        state["lux_csv"].write(",".join("" if v is None else str(v) for v in row) + "\n")
+        state["lux_csv"].flush()
+    print(f"[{msg.topic}] dev {dev} lux1={d.get('lux1')} lux2={d.get('lux2')}  "
+          f"online=({d.get('online1')},{d.get('online2')})")
+
+
 def on_message(client, userdata, msg):
+    # Dispatch by topic: lux is a separate JSON stream; control topics are ignored;
+    # everything else is decoded as a binary SampleBatch (voltage/current).
+    if msg.topic.endswith("/lux"):
+        return on_lux(client, userdata, msg)
+    if msg.topic.endswith(("/status", "/counter", "/in")):
+        return
     data = msg.payload
     if len(data) < HEADER_SIZE:
         return
@@ -157,6 +180,9 @@ def main():
                     help="CLEAN session: do NOT replay messages the broker queued "
                          "while offline (disables crash-recovery). Use for clean "
                          "per-run captures — no carryover from a previous run.")
+    ap.add_argument("--lux-csv",
+                    help="also log the SEN0644 lux JSON stream (clouds/<id>/lux) "
+                         "to this CSV file (separate from the samples --csv)")
     args = ap.parse_args()
 
     state["turns"] = max(1, args.turns)
@@ -177,6 +203,14 @@ def main():
         if write_header:
             state["csv"].write("device_id,seq,timestamp_us,vbus_raw,iout_raw,iref_raw,"
                            "i_diff,v_volts,i_amps\n")
+
+    if args.lux_csv:
+        mode = "w" if args.overwrite else "a"
+        write_header = args.overwrite or not (
+            os.path.exists(args.lux_csv) and os.path.getsize(args.lux_csv) > 0)
+        state["lux_csv"] = open(args.lux_csv, mode)
+        if write_header:
+            state["lux_csv"].write("device_id,t_us,lux1,lux2,online1,online2\n")
 
     userdata = {"topic": args.topic}
     # Session type:
@@ -208,6 +242,8 @@ def main():
     finally:
         if state["csv"]:
             state["csv"].close()
+        if state["lux_csv"]:
+            state["lux_csv"].close()
 
 
 if __name__ == "__main__":

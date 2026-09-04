@@ -26,6 +26,7 @@
 #include "adc_sampler.h"     /* reads the voltage/current sensors           */
 #include "rtc_clock.h"       /* the DS3231 real-time clock chip             */
 #include "pac1951.h"         /* PAC1951 voltage monitor (I2C, via ISO1540)  */
+#include "sen0644.h"         /* dual SEN0644 lux sensors (RS485/Modbus/UART) */
 #include "console_cmds.h"    /* the text commands you type over USB         */
 #include "wifi_transport.h"  /* Phase B: send sample batches over Wi-Fi      */
 #include "sd_logger.h"       /* Phase B: backup logging to the SD card       */
@@ -113,6 +114,15 @@ void app_main(void)
 #if ENABLE_PAC1951
     if (pac1951_init(i2c_bus) != ESP_OK) {
         ESP_LOGW(TAG, "PAC1951 init failed; voltage will read 0 until wired");
+    }
+#endif
+
+    /* 3c. Dual SEN0644 lux sensors on two hardware UARTs (RS485/Modbus). This
+     *     spawns its own poll task and returns immediately, so boot is never
+     *     blocked by sensor detection or a power-cycle wait. */
+#if ENABLE_SEN0644
+    if (sen0644_init() != ESP_OK) {
+        ESP_LOGW(TAG, "SEN0644 init failed; lux unavailable");
     }
 #endif
 

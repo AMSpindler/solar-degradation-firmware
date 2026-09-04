@@ -16,6 +16,7 @@
 
 #include "esp_adc/adc_oneshot.h"
 #include "driver/i2c_types.h"
+#include "driver/uart.h"          /* SEN0644 lux sensors on hardware UARTs         */
 
 /* ----------------------------------------------------------------------------
  * Device identity
@@ -48,6 +49,30 @@
  * chip can't spam "I2C transaction timeout". Turn ON once the isolated I2C bus
  * is in place and you want real voltage. */
 #define ENABLE_PAC1951           1             /* voltage via PAC1951 (I2C)    */
+#define ENABLE_SEN0644           1             /* dual SEN0644 lux (RS485/Modbus) */
+
+/* ----------------------------------------------------------------------------
+ * SEN0644 dual ambient-light sensors — RS485/Modbus-RTU, each on its OWN UART
+ * so both keep the factory Modbus address 0x01. Polled fast internally for
+ * quick fault-recovery; published slow on its own MQTT topic (MQTT_LUX_TOPIC_FMT
+ * below). GPIO43/44 are the ROM UART0 pins but are free here (console is on
+ * USB-Serial-JTAG). See src/sen0644.c.
+ * ------------------------------------------------------------------------- */
+#define SEN0644_NUM_SENSORS        2
+#define SEN0644_UART1_NUM          UART_NUM_1
+#define SEN0644_UART1_RX_GPIO      17
+#define SEN0644_UART1_TX_GPIO      18
+#define SEN0644_UART2_NUM          UART_NUM_2
+#define SEN0644_UART2_RX_GPIO      43
+#define SEN0644_UART2_TX_GPIO      44
+#define SEN0644_BAUD               9600
+#define SEN0644_POLL_PERIOD_MS     30      /* internal poll cadence (fast recovery) */
+#define SEN0644_PUBLISH_PERIOD_MS  1000    /* MQTT lux topic cadence (1 Hz)         */
+#define SEN0644_RESP_TIMEOUT_MS    300     /* Modbus response wait                  */
+#define SEN0644_RECOVER_AFTER_FAILS 20     /* consecutive read fails -> re-init     */
+#define SEN0644_OFFLINE_RETRY_MS   10000   /* retry an offline sensor this often    */
+#define SEN0644_POWERCYCLE_WAIT_MS 60000   /* bounded wait for a power-cycled sensor */
+#define SEN0644_BAUD_WRITE_RETRIES 3
 
 /* ----------------------------------------------------------------------------
  * ADC  — ADC1 ONLY, and now CURRENT ONLY. ADC2 shares hardware with WiFi on the
@@ -191,6 +216,7 @@
  *     mosquitto_sub -t 'clouds/+/status' -v
  * Retained = a client that subscribes late still sees the last known state. */
 #define MQTT_STATUS_TOPIC_FMT    "clouds/%08lX/status"      /* device_id        */
+#define MQTT_LUX_TOPIC_FMT       "clouds/%08lX/lux"         /* device_id (JSON) */
 #define MQTT_STATUS_ONLINE       "online"
 #define MQTT_STATUS_OFFLINE      "offline"
 
@@ -202,7 +228,7 @@
  *     mosquitto_pub -h test.mosquitto.org -t clouds/solarbatt-9f3a/in  -m 42
  * Topics are unique so they don't collide on the shared public broker.
  * Set to 0 for production (no extra traffic). */
-#define WIFI_TEST_ENABLE         1
+#define WIFI_TEST_ENABLE         0
 #define WIFI_TEST_TOPIC_OUT      "clouds/solarbatt-9f3a/counter" /* ESP -> counter */
 #define WIFI_TEST_TOPIC_IN       "clouds/solarbatt-9f3a/in"      /* PC -> ESP msgs */
 #define WIFI_TEST_PERIOD_MS      1000                        /* heartbeat cadence */
@@ -230,6 +256,7 @@
 #define PRIO_RTC_RESYNC          2
 #define PRIO_WIFI                5
 #define PRIO_SD                  3
+#define PRIO_SEN0644             4
 
 /* ----------------------------------------------------------------------------
  * Calibration storage (NVS).
