@@ -17,6 +17,7 @@
 #include "wifi_transport.h"
 #include "config.h"
 #include "adc_sampler.h"
+#include "sen0644.h"          /* dual lux sensors — for the lux publish task */
 #include "sample_packet.h"
 
 #include <string.h>
@@ -69,6 +70,9 @@ static struct sockaddr_in s_udp_dest;
 static esp_mqtt_client_handle_t s_mqtt = NULL;
 static volatile bool            s_mqtt_connected = false;
 static char                     s_mqtt_topic[64];
+#if ENABLE_SEN0644
+static char                     s_lux_topic[64];
+#endif
 static char                     s_mqtt_status_topic[64];   /* presence: online/offline */
 
 /* esp-mqtt tells us when the broker connection comes and goes. */
@@ -214,6 +218,9 @@ esp_err_t wifi_transport_init(void)
 
 #if TRANSPORT_USE_MQTT
     snprintf(s_mqtt_topic, sizeof(s_mqtt_topic), MQTT_TOPIC_FMT, (unsigned long)DEVICE_ID);
+#if ENABLE_SEN0644
+    snprintf(s_lux_topic, sizeof(s_lux_topic), MQTT_LUX_TOPIC_FMT, (unsigned long)DEVICE_ID);
+#endif
     snprintf(s_mqtt_status_topic, sizeof(s_mqtt_status_topic),
              MQTT_STATUS_TOPIC_FMT, (unsigned long)DEVICE_ID);
     /* Last Will & Testament: the broker publishes this RETAINED "offline" to the
@@ -358,6 +365,33 @@ static void thingspeak_task(void *arg)
 }
 #endif
 
+#if TRANSPORT_USE_MQTT && ENABLE_SEN0644
+/* Publish both lux sensors' latest reading as JSON (~1 Hz) to the lux topic.
+ * The SEN0644 driver polls the sensors fast in its own task; this just snapshots
+ * the cached values and ships them, mirroring the self-contained publishers
+ * above. retain=1 so a late PC subscriber still sees the last value. */
+static void sen0644_lux_task(void *arg)
+{
+    (void)arg;
+    char json[192];
+    for (;;) {
+        if (s_mqtt && s_mqtt_connected) {
+            sen0644_reading_t r;
+            if (sen0644_get_reading(&r) == ESP_OK) {
+                int n = snprintf(json, sizeof(json),
+                    "{\"t_us\":%llu,\"lux1\":%.3f,\"lux2\":%.3f,"
+                    "\"online1\":%d,\"online2\":%d,\"valid1\":%d,\"valid2\":%d}",
+                    (unsigned long long)r.timestamp_us,
+                    r.lux[0], r.lux[1],
+                    r.online[0], r.online[1], r.valid[0], r.valid[1]);
+                esp_mqtt_client_publish(s_mqtt, s_lux_topic, json, n, MQTT_QOS, 1);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(SEN0644_PUBLISH_PERIOD_MS));
+    }
+}
+#endif
+
 void wifi_transport_start(void)
 {
     s_queue = xQueueCreate(CONSUMER_QUEUE_LEN, sizeof(SamplePacket));
@@ -373,5 +407,8 @@ void wifi_transport_start(void)
 #endif
 #if THINGSPEAK_ENABLE
     xTaskCreatePinnedToCore(thingspeak_task, "thingspeak", 8192, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
+#endif
+#if TRANSPORT_USE_MQTT && ENABLE_SEN0644
+    xTaskCreatePinnedToCore(sen0644_lux_task, "lux_pub", 4096, NULL, PRIO_WIFI, NULL, CORE_NETWORK);
 #endif
 }

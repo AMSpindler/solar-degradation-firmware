@@ -39,6 +39,7 @@
 #include "esp_console.h"            /* the REPL / command registration        */
 #include "esp_heap_caps.h"         /* esp_get_free_heap_size (memory check)   */
 #include "driver/i2c_master.h"     /* i2c_master_probe for the `i2cscan` cmd  */
+#include "sen0644.h"               /* sen0644_get_reading for the `lux` cmd   */
 
 /* The shared I2C bus handle lives in main.c; `i2cscan` probes it. */
 extern i2c_master_bus_handle_t g_i2c_bus;
@@ -461,6 +462,21 @@ static int cmd_i2cscan(int argc, char **argv)
     return 0;
 }
 
+#if ENABLE_SEN0644
+/* `lux` — show the latest reading + online state of both light sensors. */
+static int cmd_lux(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    sen0644_reading_t r;
+    if (sen0644_get_reading(&r) != ESP_OK) { printf("sen0644 not ready\n"); return 1; }
+    for (int i = 0; i < SEN0644_NUM_SENSORS; i++) {
+        printf("sensor%d: %-7s  lux=%.3f  (valid=%d)\n", i + 1,
+               r.online[i] ? "online" : "offline", r.lux[i], r.valid[i]);
+    }
+    return 0;
+}
+#endif
+
 /* Small helper so registering each command is one tidy line below. */
 static void register_cmd(const char *name, const char *help, esp_console_cmd_func_t fn)
 {
@@ -493,6 +509,9 @@ void console_start(void)
     register_cmd("settime","settime Y M D h m s : set DS3231 + system clock (UTC)", cmd_settime);
     register_cmd("i2cscan","i2cscan : probe the I2C bus and list device addresses", cmd_i2cscan);
     register_cmd("status", "status : sampler/queue/RTC/heap/calibration", cmd_status);
+#if ENABLE_SEN0644
+    register_cmd("lux",    "lux : latest reading + online state of both light sensors", cmd_lux);
+#endif
 
     /* Friendly banner so the commands are visible without knowing to type `help`. */
     printf("\n=== CLOUDS firmware console ===\n");
@@ -505,6 +524,9 @@ void console_start(void)
     printf("  avg <n>        reads averaged per sample (cuts noise; 1=off)\n");
     printf("  reset cal      erase calibration (back to raw)\n");
     printf("  settime Y M D h m s   set the clock (UTC)\n");
+#if ENABLE_SEN0644
+    printf("  lux            latest lux from both light sensors + online state\n");
+#endif
     printf("  help           list every command\n\n");
 
     /* Start listening. From here, typing at the prompt triggers our commands. */
