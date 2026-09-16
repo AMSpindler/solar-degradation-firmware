@@ -49,7 +49,7 @@
  * chip can't spam "I2C transaction timeout". Turn ON once the isolated I2C bus
  * is in place and you want real voltage. */
 #define ENABLE_PAC1951           1             /* voltage via PAC1951 (I2C)    */
-#define ENABLE_SEN0644           1             /* dual SEN0644 lux (RS485/Modbus) */
+#define ENABLE_SEN0644           0             /* dual SEN0644 lux (RS485/Modbus) */
 
 /* ----------------------------------------------------------------------------
  * SEN0644 dual ambient-light sensors — RS485/Modbus-RTU, each on its OWN UART
@@ -67,7 +67,7 @@
 #define SEN0644_UART2_TX_GPIO      44
 #define SEN0644_BAUD               9600
 #define SEN0644_POLL_PERIOD_MS     30      /* internal poll cadence (fast recovery) */
-#define SEN0644_PUBLISH_PERIOD_MS  1000    /* MQTT lux topic cadence (1 Hz)         */
+#define SEN0644_PUBLISH_PERIOD_MS  200     /* MQTT lux topic cadence (5 Hz)         */
 #define SEN0644_RESP_TIMEOUT_MS    300     /* Modbus response wait                  */
 #define SEN0644_RECOVER_AFTER_FAILS 20     /* consecutive read fails -> re-init     */
 #define SEN0644_OFFLINE_RETRY_MS   10000   /* retry an offline sensor this often    */
@@ -84,10 +84,14 @@
  *   powered unless a load switch is added. Set ENABLE 0 for bench work (else the
  *   board sleeps whenever the clock is outside the window). Default 7:30-19:30.
  * ------------------------------------------------------------------------- */
-#define SLEEP_SCHEDULE_ENABLE    0
-#define SLEEP_ON_HOUR            21     /* start running at 07:30 local (11 UTC)          */
-#define SLEEP_ON_MIN             5
-#define SLEEP_OFF_HOUR           21     /* sleep at 19:30 local (23 UTC)         */
+#define SLEEP_SCHEDULE_ENABLE    1
+/* TEST WINDOW — a 2-minute napsat 12:02-12:04 (RTC time): it sleeps during
+ * [OFF, ON) and runs the rest of the day. Trigger the nap on demand by setting
+ * the clock to just before it: `settime 2026 9 11 12 01 30`. For the real
+ * deployment use ON 11:30 / OFF 23:30 (UTC = 07:30-19:30 EDT), and revert. */
+#define SLEEP_ON_HOUR            11
+#define SLEEP_ON_MIN             30
+#define SLEEP_OFF_HOUR           23
 #define SLEEP_OFF_MIN            30
 #define SLEEP_WAKE_CHUNK_S       3600   /* re-check the real clock at least hourly*/
 #define SLEEP_CHECK_PERIOD_S     10     /* how often (s) to check for OFF while awake */
